@@ -1,0 +1,18 @@
+[project]
+name = "kcal"
+version = "0.1.0"
+description = "Fetch daily steps and workout calories from Garmin Connect, with workout steps deduplicated from the daily total."
+requires-python = ">=3.10"
+dependencies = [
+    "garminconnect>=0.2.24",
+]
+
+[project.scripts]
+kcal = "kcal.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
