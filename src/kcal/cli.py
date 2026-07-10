@@ -74,15 +74,18 @@ def _render_table(stats: list[DayStats]) -> str:
             f"  non-workout={s.non_workout_steps}"
         )
         lines.append(
-            f"  calories: total={s.total_calories:.0f}  active={s.active_calories:.0f}"
-            f"  bmr={s.bmr_calories:.0f}  workout={s.workout_calories:.0f}"
+            f"  calories: total={s.total_calories:.0f}  bmr={s.bmr_calories:.0f}"
+            f"  active={s.active_calories:.0f}"
+            f" (workout={s.workout_active_calories:.0f}"
+            f" non-workout={s.non_workout_active_calories:.0f})"
         )
         if s.workouts:
             lines.append("  workouts:")
             for w in s.workouts:
                 lines.append(
                     f"    - {w.name} ({w.activity_type}) "
-                    f"steps={w.steps} calories={w.calories:.0f} "
+                    f"steps={w.steps} calories={w.calories:.0f}"
+                    f" (active={w.active_calories:.0f} bmr={w.bmr_calories:.0f}) "
                     f"duration={w.duration_seconds / 60:.1f}min"
                 )
         else:
@@ -106,8 +109,10 @@ def _render_csv(stats: list[DayStats]) -> str:
             "workout_steps",
             "non_workout_steps",
             "total_calories",
-            "active_calories",
             "bmr_calories",
+            "active_calories",
+            "workout_active_calories",
+            "non_workout_active_calories",
             "workout_calories",
             "workout_count",
         ]
@@ -120,8 +125,10 @@ def _render_csv(stats: list[DayStats]) -> str:
                 s.workout_steps,
                 s.non_workout_steps,
                 round(s.total_calories),
-                round(s.active_calories),
                 round(s.bmr_calories),
+                round(s.active_calories),
+                round(s.workout_active_calories),
+                round(s.non_workout_active_calories),
                 round(s.workout_calories),
                 len(s.workouts),
             ]
