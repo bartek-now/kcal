@@ -85,3 +85,14 @@ def test_non_workout_active_calories_never_negative():
     stats = build_day_stats("2026-07-06", summary, [RUN_ACTIVITY])
     assert stats.workout_active_calories == 300
     assert stats.non_workout_active_calories == 0
+
+
+def test_workout_active_calories_never_negative():
+    """bmrCalories can exceed calories in malformed/incomplete source data
+    (e.g. calories missing but bmrCalories present) - active_calories must
+    still floor at 0 rather than go negative.
+    """
+    activity = {**RUN_ACTIVITY, "calories": None, "bmrCalories": 50}
+    stats = build_day_stats("2026-07-06", SUMMARY, [activity])
+    assert stats.workouts[0].active_calories == 0
+    assert stats.workout_active_calories == 0

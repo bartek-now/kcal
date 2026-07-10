@@ -9,8 +9,21 @@ out, so you get:
 - `total_steps` — Garmin's raw daily total
 - `workout_steps` — steps attributed to activities that reported a step count
 - `non_workout_steps` — `total_steps` minus `workout_steps` (never negative)
-- `workout_calories` — calories summed across the day's activities
 - `total_calories` / `active_calories` / `bmr_calories` — Garmin's daily summary
+
+Calories get a similar split, with one wrinkle: Garmin's per-activity
+`calories` field is **gross** — it includes the basal metabolic (BMR) cost
+for that activity's duration — while the day summary's `active_calories` is
+already **net** of BMR. Comparing them directly (e.g. a long hike's gross
+calories vs. the day's net active calories) can make a single workout look
+like it burned more than the whole day's active total. So:
+
+- `workout_calories` — gross calories Garmin attributes to workouts (matches
+  what the Garmin app shows per activity)
+- `workout_active_calories` — workout calories net of BMR; this is the part
+  actually comparable to (and subtracted from) `active_calories`
+- `non_workout_active_calories` — `active_calories` minus
+  `workout_active_calories` (never negative)
 
 ## Setup
 

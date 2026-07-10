@@ -35,8 +35,9 @@ class Workout:
         """Calories net of the basal metabolic cost already counted in the
         day's bmr_calories. Garmin's per-activity `calories` is gross (active
         + BMR for that duration), unlike the day summary's activeKilocalories.
+        Clamped to 0 in case of missing/inconsistent source data.
         """
-        return self.calories - self.bmr_calories
+        return max(self.calories - self.bmr_calories, 0.0)
 
 
 @dataclass
