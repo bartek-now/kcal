@@ -35,12 +35,20 @@ has MFA enabled, you'll be prompted for the code on first login.
 
 ```
 kcal fetch --date 2026-07-06
-kcal fetch --start 2026-07-01 --end 2026-07-07 --format csv --output week.csv
+kcal fetch --from 2026-07-01 --to 2026-07-07 --format csv --output week.csv
+kcal fetch --from 2026-07-01
 kcal fetch --format json
 ```
 
-`--format` is `table` (default), `json`, or `csv`. Omit `--date`/`--start`/`--end`
-to fetch today.
+`--format` is `table` (default), `json`, or `csv`.
+
+Date selection:
+- `--date`: a single specific day.
+- `--from` and `--to`: an inclusive range.
+- `--from` alone: from that day through yesterday.
+- neither given: yesterday only (today is skipped since Garmin's daily total
+  isn't final until the day is over).
+- `--to` without `--from` is an error.
 
 ## Tests
 
