@@ -72,32 +72,26 @@ def _render_csv(stats: list[DayStats]) -> str:
     writer.writerow(
         [
             "date",
-            "total_steps",
-            "workout_steps",
-            "non_workout_steps",
-            "total_calories",
-            "bmr_calories",
+            "activity_active_calories",
+            "activity_total_calories",
+            "steps",
+            "non_activity_steps",
+            "estimated_step_calories",
             "active_calories",
-            "workout_active_calories",
-            "non_workout_active_calories",
-            "workout_calories",
-            "workout_count",
+            "passive_calories",
         ]
     )
     for s in stats:
         writer.writerow(
             [
                 s.date,
-                s.total_steps,
-                s.workout_steps,
-                s.non_workout_steps,
-                round(s.total_calories),
-                round(s.bmr_calories),
-                round(s.active_calories),
                 round(s.workout_active_calories),
-                round(s.non_workout_active_calories),
                 round(s.workout_calories),
-                len(s.workouts),
+                s.total_steps,
+                s.non_workout_steps,
+                round(s.estimated_step_calories),
+                round(s.active_calories),
+                round(s.bmr_calories),
             ]
         )
     return buf.getvalue()
