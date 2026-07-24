@@ -48,12 +48,11 @@ has MFA enabled, you'll be prompted for the code on first login.
 
 ```
 kcal fetch --date 2026-07-06
-kcal fetch --from 2026-07-01 --to 2026-07-07 --format csv --output week.csv
+kcal fetch --from 2026-07-01 --to 2026-07-07 --output week.csv
 kcal fetch --from 2026-07-01
-kcal fetch --format json
 ```
 
-`--format` is `table` (default), `json`, or `csv`.
+Output is CSV, printed to stdout unless `--output` is given.
 
 Date selection:
 - `--date`: a single specific day.

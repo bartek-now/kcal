@@ -76,31 +76,3 @@ class DayStats:
     @property
     def non_workout_active_calories(self) -> float:
         return max(self.active_calories - self.workout_active_calories, 0.0)
-
-    def to_dict(self) -> dict:
-        return {
-            "date": self.date,
-            "total_steps": self.total_steps,
-            "workout_steps": self.workout_steps,
-            "non_workout_steps": self.non_workout_steps,
-            "total_calories": self.total_calories,
-            "active_calories": self.active_calories,
-            "bmr_calories": self.bmr_calories,
-            "workout_calories": self.workout_calories,
-            "workout_active_calories": self.workout_active_calories,
-            "non_workout_active_calories": self.non_workout_active_calories,
-            "workouts": [
-                {
-                    "activity_id": w.activity_id,
-                    "name": w.name,
-                    "activity_type": w.activity_type,
-                    "start_time": w.start_time,
-                    "duration_minutes": round(w.duration_seconds / 60, 1),
-                    "calories": w.calories,
-                    "bmr_calories": w.bmr_calories,
-                    "active_calories": w.active_calories,
-                    "steps": w.steps,
-                }
-                for w in self.workouts
-            ],
-        }
