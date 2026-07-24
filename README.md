@@ -2,28 +2,24 @@
 
 Fetches daily steps and workout calorie data from Garmin Connect.
 
-Garmin's daily step total already includes steps taken during step-based
-workouts (runs, walks, hikes). This tool subtracts those workout steps back
-out, so you get:
+Each row of output covers one day:
 
-- `total_steps` — Garmin's raw daily total
-- `workout_steps` — steps attributed to activities that reported a step count
-- `non_workout_steps` — `total_steps` minus `workout_steps` (never negative)
-- `total_calories` / `active_calories` / `bmr_calories` — Garmin's daily summary
-
-Calories get a similar split, with one wrinkle: Garmin's per-activity
-`calories` field is **gross** — it includes the basal metabolic (BMR) cost
-for that activity's duration — while the day summary's `active_calories` is
-already **net** of BMR. Comparing them directly (e.g. a long hike's gross
-calories vs. the day's net active calories) can make a single workout look
-like it burned more than the whole day's active total. So:
-
-- `workout_calories` — gross calories Garmin attributes to workouts (matches
-  what the Garmin app shows per activity)
-- `workout_active_calories` — workout calories net of BMR; this is the part
-  actually comparable to (and subtracted from) `active_calories`
-- `non_workout_active_calories` — `active_calories` minus
-  `workout_active_calories` (never negative)
+- `workout_active_calories` — active calories from tracked workouts, summed
+  across all of that day's activities. Garmin's per-activity `calories` field
+  is gross (it includes the basal metabolic cost for that activity's
+  duration), so this is net of that BMR portion
+- `workout_calories` — gross calories Garmin attributes to workouts
+  (FYI; includes the BMR portion netted out of `workout_active_calories`)
+- `steps` — Garmin's raw daily step total
+- `non_workout_steps` — `steps` minus steps attributed to tracked workouts
+  (never negative)
+- `estimated_step_calories` — a rough calorie estimate from
+  `non_workout_steps`, using a flat 0.04 kcal/step rule of thumb (~40 kcal
+  per 1000 steps), independent of Garmin's own calorie figures. Workout steps
+  are excluded since those calories are already covered by
+  `workout_active_calories`
+- `active_calories` — Garmin's daily active calorie total
+- `passive_calories` — Garmin's daily BMR (basal/passive) calorie total
 
 ## Setup
 

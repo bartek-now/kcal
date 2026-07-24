@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+STEP_CALORIE_ESTIMATE_KCAL_PER_STEP = 0.04
+
 
 @dataclass
 class Workout:
@@ -76,3 +78,12 @@ class DayStats:
     @property
     def non_workout_active_calories(self) -> float:
         return max(self.active_calories - self.workout_active_calories, 0.0)
+
+    @property
+    def estimated_step_calories(self) -> float:
+        """Rough calorie estimate from non_workout_steps, using a flat
+        ~0.04 kcal/step rule of thumb (~40 kcal per 1000 steps). Excludes
+        workout steps since those calories are already covered by
+        workout_active_calories. Independent of Garmin's own calorie figures.
+        """
+        return self.non_workout_steps * STEP_CALORIE_ESTIMATE_KCAL_PER_STEP

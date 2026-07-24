@@ -72,8 +72,8 @@ def test_to_before_from_errors():
 def test_render_csv_header_and_row():
     rows = _render_csv(ONE_DAY).splitlines()
     assert rows[0] == (
-        "date,total_steps,workout_steps,non_workout_steps,total_calories,"
-        "bmr_calories,active_calories,workout_active_calories,"
-        "non_workout_active_calories,workout_calories,workout_count"
+        "date,workout_active_calories,workout_calories,steps,"
+        "non_workout_steps,estimated_step_calories,active_calories,"
+        "passive_calories"
     )
-    assert rows[1] == "2026-07-06,10000,4000,6000,2400,1800,600,300,300,350,1"
+    assert rows[1] == "2026-07-06,300,350,10000,6000,240,600,1800"
