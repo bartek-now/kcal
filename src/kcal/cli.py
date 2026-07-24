@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -65,38 +64,6 @@ def _fetch_days(days: list[date]) -> list[DayStats]:
     return results
 
 
-def _render_table(stats: list[DayStats]) -> str:
-    lines = []
-    for s in stats:
-        lines.append(f"{s.date}")
-        lines.append(
-            f"  steps:    total={s.total_steps}  workout={s.workout_steps}"
-            f"  non-workout={s.non_workout_steps}"
-        )
-        lines.append(
-            f"  calories: total={s.total_calories:.0f}  bmr={s.bmr_calories:.0f}"
-            f"  active={s.active_calories:.0f}"
-            f" (workout={s.workout_active_calories:.0f}"
-            f" non-workout={s.non_workout_active_calories:.0f})"
-        )
-        if s.workouts:
-            lines.append("  workouts:")
-            for w in s.workouts:
-                lines.append(
-                    f"    - {w.name} ({w.activity_type}) "
-                    f"steps={w.steps} calories={w.calories:.0f}"
-                    f" (active={w.active_calories:.0f} bmr={w.bmr_calories:.0f}) "
-                    f"duration={w.duration_seconds / 60:.1f}min"
-                )
-        else:
-            lines.append("  workouts: none")
-    return "\n".join(lines)
-
-
-def _render_json(stats: list[DayStats]) -> str:
-    return json.dumps([s.to_dict() for s in stats], indent=2)
-
-
 def _render_csv(stats: list[DayStats]) -> str:
     from io import StringIO
 
@@ -145,10 +112,7 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 
     stats = _fetch_days(days)
 
-    renderer = {"table": _render_table, "json": _render_json, "csv": _render_csv}[
-        args.format
-    ]
-    output = renderer(stats)
+    output = _render_csv(stats)
 
     if args.output:
         Path(args.output).write_text(output, encoding="utf-8")
@@ -176,9 +140,6 @@ def build_parser() -> argparse.ArgumentParser:
         dest="to_date",
         metavar="DATE",
         help="Range end, YYYY-MM-DD (default: yesterday, requires --from)",
-    )
-    fetch.add_argument(
-        "--format", choices=["table", "json", "csv"], default="table"
     )
     fetch.add_argument("--output", help="Write to this file instead of stdout")
     fetch.set_defaults(func=_cmd_fetch)
