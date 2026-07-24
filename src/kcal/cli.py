@@ -72,10 +72,10 @@ def _render_csv(stats: list[DayStats]) -> str:
     writer.writerow(
         [
             "date",
-            "activity_active_calories",
-            "activity_total_calories",
+            "workout_active_calories",
+            "workout_calories",
             "steps",
-            "non_activity_steps",
+            "non_workout_steps",
             "estimated_step_calories",
             "active_calories",
             "passive_calories",

@@ -4,20 +4,20 @@ Fetches daily steps and workout calorie data from Garmin Connect.
 
 Each row of output covers one day:
 
-- `activity_active_calories` — active calories from tracked activities, summed
+- `workout_active_calories` — active calories from tracked workouts, summed
   across all of that day's activities. Garmin's per-activity `calories` field
   is gross (it includes the basal metabolic cost for that activity's
   duration), so this is net of that BMR portion
-- `activity_total_calories` — gross calories Garmin attributes to activities
-  (FYI; includes the BMR portion netted out of `activity_active_calories`)
+- `workout_calories` — gross calories Garmin attributes to workouts
+  (FYI; includes the BMR portion netted out of `workout_active_calories`)
 - `steps` — Garmin's raw daily step total
-- `non_activity_steps` — `steps` minus steps attributed to tracked activities
+- `non_workout_steps` — `steps` minus steps attributed to tracked workouts
   (never negative)
 - `estimated_step_calories` — a rough calorie estimate from
-  `non_activity_steps`, using a flat 0.04 kcal/step rule of thumb (~40 kcal
+  `non_workout_steps`, using a flat 0.04 kcal/step rule of thumb (~40 kcal
   per 1000 steps), independent of Garmin's own calorie figures. Workout steps
   are excluded since those calories are already covered by
-  `activity_active_calories`
+  `workout_active_calories`
 - `active_calories` — Garmin's daily active calorie total
 - `passive_calories` — Garmin's daily BMR (basal/passive) calorie total
 

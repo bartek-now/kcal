@@ -81,7 +81,7 @@ class DayStats:
 
     @property
     def estimated_step_calories(self) -> float:
-        """Rough calorie estimate from non-workout step count, using a flat
+        """Rough calorie estimate from non_workout_steps, using a flat
         ~0.04 kcal/step rule of thumb (~40 kcal per 1000 steps). Excludes
         workout steps since those calories are already covered by
         workout_active_calories. Independent of Garmin's own calorie figures.
