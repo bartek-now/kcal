@@ -14,3 +14,7 @@ def fetch_day_summary(api: Garmin, day: date) -> dict:
 def fetch_activities(api: Garmin, day: date) -> list[dict]:
     iso = day.isoformat()
     return api.get_activities_by_date(iso, iso)
+
+
+def fetch_weigh_ins(api: Garmin, day: date) -> dict:
+    return api.get_daily_weigh_ins(day.isoformat())

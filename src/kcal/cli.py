@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from kcal.auth import login
-from kcal.client import fetch_activities, fetch_day_summary
+from kcal.client import fetch_activities, fetch_day_summary, fetch_weigh_ins
 from kcal.dedupe import build_day_stats
 from kcal.models import DayStats
 
@@ -60,7 +60,10 @@ def _fetch_days(days: list[date]) -> list[DayStats]:
     for day in days:
         summary = fetch_day_summary(api, day)
         activities = fetch_activities(api, day)
-        results.append(build_day_stats(day.isoformat(), summary, activities))
+        weigh_in = fetch_weigh_ins(api, day)
+        results.append(
+            build_day_stats(day.isoformat(), summary, activities, weigh_in)
+        )
     return results
 
 
@@ -72,6 +75,7 @@ def _render_csv(stats: list[DayStats]) -> str:
     writer.writerow(
         [
             "date",
+            "weight_kg",
             "workout_active_calories",
             "workout_calories",
             "steps",
@@ -84,6 +88,7 @@ def _render_csv(stats: list[DayStats]) -> str:
         writer.writerow(
             [
                 s.date,
+                s.weight_kg if s.weight_kg is not None else "",
                 round(s.workout_active_calories),
                 round(s.workout_calories),
                 s.total_steps,

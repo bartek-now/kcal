@@ -43,6 +43,7 @@ class Workout:
 @dataclass
 class DayStats:
     date: str
+    weight_kg: float | None
     total_steps: int
     total_calories: float
     active_calories: float

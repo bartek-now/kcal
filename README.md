@@ -4,6 +4,8 @@ Fetches daily steps and workout calorie data from Garmin Connect.
 
 Each row of output covers one day:
 
+- `weight_kg` — weight from your Garmin scale, taken from the last weigh-in
+  of the day if there was more than one; blank if you didn't weigh in that day
 - `workout_active_calories` — active calories from tracked workouts, summed
   across all of that day's activities. Garmin's per-activity `calories` field
   is gross (it includes the basal metabolic cost for that activity's
