@@ -76,7 +76,6 @@ def _render_csv(stats: list[DayStats]) -> str:
             "workout_calories",
             "steps",
             "non_workout_steps",
-            "estimated_step_calories",
             "active_calories",
             "passive_calories",
         ]
@@ -89,7 +88,6 @@ def _render_csv(stats: list[DayStats]) -> str:
                 round(s.workout_calories),
                 s.total_steps,
                 s.non_workout_steps,
-                round(s.estimated_step_calories),
                 round(s.active_calories),
                 round(s.bmr_calories),
             ]
