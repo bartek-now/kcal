@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -11,6 +12,7 @@ YESTERDAY = date(2026, 7, 8)
 ONE_DAY = [
     DayStats(
         date="2026-07-06",
+        weight_kg=70.5,
         total_steps=10000,
         total_calories=2400,
         active_calories=600,
@@ -72,8 +74,13 @@ def test_to_before_from_errors():
 def test_render_csv_header_and_row():
     rows = _render_csv(ONE_DAY).splitlines()
     assert rows[0] == (
-        "date,workout_active_calories,workout_calories,steps,"
-        "non_workout_steps,estimated_step_calories,active_calories,"
-        "passive_calories"
+        "date,weight_kg,workout_active_calories,workout_calories,steps,"
+        "non_workout_steps,active_calories,passive_calories"
     )
-    assert rows[1] == "2026-07-06,300,350,10000,6000,240,600,1800"
+    assert rows[1] == "2026-07-06,70.5,300,350,10000,6000,600,1800"
+
+
+def test_render_csv_blank_weight_when_no_weigh_in():
+    day = replace(ONE_DAY[0], weight_kg=None)
+    rows = _render_csv([day]).splitlines()
+    assert rows[1] == "2026-07-06,,300,350,10000,6000,600,1800"

@@ -87,6 +87,33 @@ def test_non_workout_active_calories_never_negative():
     assert stats.non_workout_active_calories == 0
 
 
+def test_weight_kg_none_when_no_weigh_in_given():
+    stats = build_day_stats("2026-07-06", SUMMARY, [])
+    assert stats.weight_kg is None
+
+
+def test_weight_kg_none_when_weigh_in_list_empty():
+    stats = build_day_stats("2026-07-06", SUMMARY, [], {"dateWeightList": []})
+    assert stats.weight_kg is None
+
+
+def test_weight_kg_converts_grams_to_kg():
+    weigh_in = {"dateWeightList": [{"date": 1751792400000, "weight": 70500.0}]}
+    stats = build_day_stats("2026-07-06", SUMMARY, [], weigh_in)
+    assert stats.weight_kg == 70.5
+
+
+def test_weight_kg_takes_last_weigh_in_of_day():
+    weigh_in = {
+        "dateWeightList": [
+            {"date": 1751792400000, "weight": 71000.0},  # earlier
+            {"date": 1751835600000, "weight": 70200.0},  # later - wins
+        ]
+    }
+    stats = build_day_stats("2026-07-06", SUMMARY, [], weigh_in)
+    assert stats.weight_kg == 70.2
+
+
 def test_workout_active_calories_never_negative():
     """bmrCalories can exceed calories in malformed/incomplete source data
     (e.g. calories missing but bmrCalories present) - active_calories must
