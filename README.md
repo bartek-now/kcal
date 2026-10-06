@@ -61,3 +61,22 @@ Date selection:
 pip install -e . pytest
 pytest
 ```
+
+## MCP server
+
+`kcal-mcp` runs a stdio MCP server with one tool, `get_garmin_daily_stats`
+(`date`, or `from_date`/`to_date`; defaults to yesterday), returning the same
+fields as the CSV plus per-workout details. Login is non-interactive, so run
+`kcal fetch` once in a terminal first to cache the session token.
+
+Claude Desktop / Claude Code config:
+
+```json
+{
+  "mcpServers": {
+    "kcal": {
+      "command": "C:\Users\Barto\src\kcal\.venv\Scripts\kcal-mcp.exe"
+    }
+  }
+}
+```

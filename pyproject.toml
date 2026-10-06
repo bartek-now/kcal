@@ -5,10 +5,12 @@ description = "Fetch daily steps and workout calories from Garmin Connect, with 
 requires-python = ">=3.10"
 dependencies = [
     "garminconnect>=0.2.24",
+    "mcp>=1.2,<2",
 ]
 
 [project.scripts]
 kcal = "kcal.cli:main"
+kcal-mcp = "kcal.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

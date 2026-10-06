@@ -54,8 +54,8 @@ def resolve_days(
     return [today - timedelta(days=1)]
 
 
-def _fetch_days(days: list[date]) -> list[DayStats]:
-    api = login()
+def _fetch_days(days: list[date], login_fn=login) -> list[DayStats]:
+    api = login_fn()
     results = []
     for day in days:
         summary = fetch_day_summary(api, day)
