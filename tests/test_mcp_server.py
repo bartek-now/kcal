@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
@@ -81,3 +82,14 @@ def test_oversized_list_reports_item_count(monkeypatch):
     )
     out = call("call_garmin_endpoint", {"endpoint": "get_sleep_data"})
     assert out["items"] == 100 and "50%" in out["error"]
+
+
+def test_tools_run_off_the_event_loop(monkeypatch):
+    loop_thread = threading.get_ident()
+    seen = []
+    monkeypatch.setattr(
+        mcp_server.endpoints, "call_endpoint",
+        lambda api, e, a: seen.append(threading.get_ident()) or {},
+    )
+    call("call_garmin_endpoint", {"endpoint": "get_sleep_data"})
+    assert seen and seen[0] != loop_thread

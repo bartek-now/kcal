@@ -10,10 +10,12 @@ import functools
 import hashlib
 import os
 import subprocess
+import threading
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from kcal import endpoints
@@ -56,13 +58,17 @@ _LOADED_COMMIT = _git_commit()
 _STARTED = datetime.now().astimezone().isoformat(timespec="seconds")
 
 _api = None
+_api_lock = threading.Lock()
 
 
 def _get_api():
-    """Log in once per server process and reuse the session."""
+    """Log in once per server process and reuse the session. Tools run in
+    worker threads, so concurrent first calls must not both log in.
+    """
     global _api
-    if _api is None:
-        _api = login(prompt_mfa=_no_mfa)
+    with _api_lock:
+        if _api is None:
+            _api = login(prompt_mfa=_no_mfa)
     return _api
 
 
@@ -77,12 +83,17 @@ def _tool(fn):
     """Register `fn` as a tool whose result goes out as one compact JSON text
     block, replaced by a notice if it's too large. (FastMCP's default
     pretty-prints, sends each list item as its own block, and for typed returns
-    sends everything a second time as structured content.)
+    sends everything a second time as structured content.) `fn` runs in a
+    worker thread: FastMCP calls sync tools on its event loop, so a slow
+    Garmin request would otherwise stall every other request.
     """
 
+    def run(**kwargs):
+        return endpoints.to_json(endpoints.cap_size(fn(**kwargs)))
+
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        return endpoints.to_json(endpoints.cap_size(fn(*args, **kwargs)))
+    async def wrapper(**kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(run, **kwargs))
 
     return mcp.tool(structured_output=False)(wrapper)
 
