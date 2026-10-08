@@ -86,7 +86,7 @@ Claude Desktop / Claude Code config:
 {
   "mcpServers": {
     "kcal": {
-      "command": "C:\Users\Barto\src\kcal\.venv\Scripts\kcal-mcp.exe"
+      "command": "C:\\Users\\Barto\\src\\kcal\\.venv\\Scripts\\kcal-mcp.exe"
     }
   }
 }

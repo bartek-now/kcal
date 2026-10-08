@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from kcal import endpoints
@@ -90,3 +92,17 @@ def test_default_day_metrics_are_summarized_and_total_capped():
     capped = endpoints.day_metrics(api, "d", ["sleep_data", "hrv_data"])
     assert "Omitted" in capped["hrv_data"]["error"]
     assert capped["sleep_data"]["summary"] == 1
+
+
+def test_empty_metrics_selection_stays_empty():
+    assert endpoints.day_metrics(FakeApi(), "d", []) == {"date": "d"}
+
+
+def test_total_cap_counts_keys_and_punctuation():
+    out = endpoints._fit_total({"a": "x" * 50, "b": "y" * 50}, limit=100)
+    assert len(json.dumps(out)) <= 100
+
+
+def test_total_cap_falls_back_when_keys_alone_too_big():
+    out = endpoints._fit_total({"k" * 500: 1}, limit=100)
+    assert set(out) == {"error"}

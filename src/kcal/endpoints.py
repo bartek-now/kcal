@@ -102,7 +102,7 @@ def single_day_metrics() -> list[str]:
 
 def day_metrics(api: Garmin, day: str, metrics: list[str] | None = None) -> dict:
     """Fetch several single-date metrics. Defaults are summarized; explicit ones raw."""
-    wanted = metrics or DEFAULT_DAY_METRICS
+    wanted = DEFAULT_DAY_METRICS if metrics is None else metrics
     slim = metrics is None
     available = set(single_day_metrics())
     out: dict[str, Any] = {"date": day}
@@ -122,11 +122,12 @@ def _fit_total(out: dict, limit: int = MAX_RESULT_CHARS) -> dict:
     """Replace the largest metrics with notices until the whole response fits."""
     sizes = {k: len(json.dumps(v, default=str)) for k, v in out.items()}
     for k in sorted(sizes, key=sizes.get, reverse=True):
-        if sum(sizes.values()) <= limit:
-            break
+        if len(json.dumps(out, default=str)) <= limit:
+            return out
         out[k] = {
             "error": f"Omitted: {sizes[k]:,} chars would exceed the {limit:,} "
             "char response limit; request this metric on its own."
         }
-        sizes[k] = len(json.dumps(out[k]))
-    return out
+    if len(json.dumps(out, default=str)) <= limit:
+        return out
+    return {"error": f"Response exceeds the {limit:,} char limit; request fewer metrics."}
