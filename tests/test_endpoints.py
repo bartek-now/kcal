@@ -35,7 +35,7 @@ def test_call_passes_args():
 
 
 def test_cap_size_replaces_large_result():
-    out = endpoints.cap_size({"a": "x" * 300}, limit=200)
+    out = endpoints.cap_size({"a": "x" * 400}, limit=300)
     assert "error" in out and out["top_level_keys"] == ["a"]
 
 
