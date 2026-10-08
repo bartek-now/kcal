@@ -35,8 +35,25 @@ def test_call_passes_args():
 
 
 def test_cap_size_replaces_large_result():
-    out = endpoints.cap_size({"a": "x" * 100}, limit=10)
+    out = endpoints.cap_size({"a": "x" * 300}, limit=200)
     assert "error" in out and out["top_level_keys"] == ["a"]
+
+
+def test_cap_size_drops_key_list_when_notice_too_big():
+    out = endpoints.cap_size({f"key{i}": i for i in range(100)}, limit=200)
+    assert "top_level_keys" not in out and len(json.dumps(out)) <= 200
+
+
+def test_day_metrics_dedupes():
+    class CountingApi:
+        calls = 0
+
+        def get_sleep_data(self, cdate):
+            CountingApi.calls += 1
+            return {}
+
+    endpoints.day_metrics(CountingApi(), "d", ["sleep_data", "sleep_data"])
+    assert CountingApi.calls == 1
 
 
 def test_day_metrics_isolates_errors():

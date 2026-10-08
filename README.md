@@ -64,7 +64,7 @@ pytest
 
 ## MCP server
 
-`kcal-mcp` runs a stdio MCP server with four tools:
+`kcal-mcp` runs a stdio MCP server with five tools:
 
 - `get_garmin_daily_stats` (`date`, or `from_date`/`to_date`; defaults to
   yesterday): the same fields as the CSV plus per-workout details.
@@ -76,6 +76,8 @@ pytest
   e.g. `get_sleep_data` with `{"cdate": "2026-10-05"}`. Only `get_*` methods
   are reachable, so nothing can write or delete. Results over ~200k chars are
   replaced by a notice asking for a narrower request.
+- `get_kcal_server_info`: which code the running server loaded and whether
+  it's stale (code on disk changed since it started).
 
 `kcal fetch` output is unchanged. Login is non-interactive, so run
 `kcal fetch` once in a terminal first to cache the session token.
@@ -86,7 +88,7 @@ Claude Desktop / Claude Code config:
 {
   "mcpServers": {
     "kcal": {
-      "command": "C:\\Users\\Barto\\src\\kcal\\.venv\\Scripts\\kcal-mcp.exe"
+      "command": "path\\to\\kcal\\.venv\\Scripts\\kcal-mcp.exe"
     }
   }
 }

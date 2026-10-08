@@ -72,12 +72,14 @@ def cap_size(result: Any, limit: int = MAX_RESULT_CHARS) -> Any:
     size = len(json.dumps(result, default=str))
     if size <= limit:
         return result
-    keys = list(result) if isinstance(result, dict) else None
-    return {
+    notice = {
         "error": f"Result is {size:,} chars (limit {limit:,}); request a narrower "
         "date range or different endpoint.",
-        "top_level_keys": keys,
+        "top_level_keys": list(result) if isinstance(result, dict) else None,
     }
+    if len(json.dumps(notice, default=str)) > limit:
+        del notice["top_level_keys"]
+    return notice
 
 
 def summarize(value: Any, max_list: int = SUMMARY_MAX_LIST) -> Any:
@@ -102,7 +104,7 @@ def single_day_metrics() -> list[str]:
 
 def day_metrics(api: Garmin, day: str, metrics: list[str] | None = None) -> dict:
     """Fetch several single-date metrics. Defaults are summarized; explicit ones raw."""
-    wanted = DEFAULT_DAY_METRICS if metrics is None else metrics
+    wanted = DEFAULT_DAY_METRICS if metrics is None else list(dict.fromkeys(metrics))
     slim = metrics is None
     available = set(single_day_metrics())
     out: dict[str, Any] = {"date": day}
