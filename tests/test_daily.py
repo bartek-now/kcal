@@ -60,6 +60,12 @@ def test_range_at_max_days_ok():
     assert len(resolve_days(None, "2026-07-01", "2026-07-04", today=TODAY, max_days=4)) == 4
 
 
+def test_huge_range_rejected_without_building_it(monkeypatch):
+    monkeypatch.setattr("kcal.daily.timedelta", None)  # building the list would fail
+    with pytest.raises(ValueError, match="at most 120"):
+        resolve_days(None, "0001-01-01", "9999-12-31", today=TODAY, max_days=120)
+
+
 def test_single_date_ignores_max_days():
     assert resolve_days("2026-07-01", None, None, today=TODAY, max_days=0) == [date(2026, 7, 1)]
 

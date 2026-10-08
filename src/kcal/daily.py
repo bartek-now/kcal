@@ -17,11 +17,16 @@ def _parse_date(value: str) -> date:
         raise ValueError(f"Invalid date {value!r}; expected YYYY-MM-DD.") from None
 
 
-def _date_range(start: date, end: date) -> list[date]:
+def _date_range(start: date, end: date, max_days: int | None = None) -> list[date]:
     if end < start:
         raise ValueError(f"End date {end} is before start date {start}.")
-    days = (end - start).days
-    return [start + timedelta(days=i) for i in range(days + 1)]
+    count = (end - start).days + 1
+    if max_days is not None and count > max_days:
+        raise ValueError(
+            f"Range is {count} days; at most {max_days} can be fetched at "
+            "once. Split it into smaller ranges."
+        )
+    return [start + timedelta(days=i) for i in range(count)]
 
 
 def resolve_days(
@@ -54,13 +59,7 @@ def resolve_days(
         return [_parse_date(single)]
     if start:
         last = _parse_date(end) if end else today - timedelta(days=1)
-        days = _date_range(_parse_date(start), last)
-        if max_days is not None and len(days) > max_days:
-            raise ValueError(
-                f"Range is {len(days)} days; at most {max_days} can be fetched at "
-                "once. Split it into smaller ranges."
-            )
-        return days
+        return _date_range(_parse_date(start), last, max_days)
     return [today - timedelta(days=1)]
 
 
