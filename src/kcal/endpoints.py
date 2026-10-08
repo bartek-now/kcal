@@ -25,7 +25,9 @@ DEFAULT_DAY_METRICS = [
     "intensity_minutes_data",
 ]
 
-MAX_RESULT_CHARS = 200_000
+# Clients truncate tool results well below this (Claude Desktop somewhere
+# between 50k and 68k chars), so stay under the lowest one seen.
+MAX_RESULT_CHARS = 50_000
 # Lists longer than this are intraday series (per-minute movement, HRV
 # readings, ...); the default day summary drops them and keeps scalars.
 SUMMARY_MAX_LIST = 20
@@ -67,18 +69,27 @@ def call_endpoint(api: Garmin, endpoint: str, args: dict | None = None) -> Any:
     return getattr(api, endpoint)(**(args or {}))
 
 
+def to_json(value: Any) -> str:
+    """Compact JSON, the form results are measured and sent in."""
+    return json.dumps(value, default=str, separators=(",", ":"))
+
+
 def cap_size(result: Any, limit: int = MAX_RESULT_CHARS) -> Any:
     """Return `result`, or a notice if its JSON is too large to hand back."""
-    size = len(json.dumps(result, default=str))
+    size = len(to_json(result))
     if size <= limit:
         return result
-    notice = {
-        "error": f"Result is {size:,} chars (limit {limit:,}); request a narrower "
-        "date range or different endpoint.",
-        "top_level_keys": list(result) if isinstance(result, dict) else None,
+    notice: dict[str, Any] = {
+        "error": f"Result is {size:,} chars (limit {limit:,}). About "
+        f"{limit / size:.0%} of it would fit; narrow the date range by that much "
+        "and split the rest into further calls, or use a different endpoint.",
     }
-    if len(json.dumps(notice, default=str)) > limit:
-        del notice["top_level_keys"]
+    if isinstance(result, list):
+        notice["items"] = len(result)
+    elif isinstance(result, dict):
+        notice["top_level_keys"] = list(result)
+        if len(to_json(notice)) > limit:
+            del notice["top_level_keys"]
     return notice
 
 
@@ -122,14 +133,14 @@ def day_metrics(api: Garmin, day: str, metrics: list[str] | None = None) -> dict
 
 def _fit_total(out: dict, limit: int = MAX_RESULT_CHARS) -> dict:
     """Replace the largest metrics with notices until the whole response fits."""
-    sizes = {k: len(json.dumps(v, default=str)) for k, v in out.items()}
+    sizes = {k: len(to_json(v)) for k, v in out.items()}
     for k in sorted(sizes, key=sizes.get, reverse=True):
-        if len(json.dumps(out, default=str)) <= limit:
+        if len(to_json(out)) <= limit:
             return out
         out[k] = {
             "error": f"Omitted: {sizes[k]:,} chars would exceed the {limit:,} "
             "char response limit; request this metric on its own."
         }
-    if len(json.dumps(out, default=str)) <= limit:
+    if len(to_json(out)) <= limit:
         return out
     return {"error": f"Response exceeds the {limit:,} char limit; request fewer metrics."}

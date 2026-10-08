@@ -6,6 +6,7 @@ first so the session token (and any MFA code) is cached under ~/.kcal.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import subprocess
@@ -22,8 +23,9 @@ from kcal.models import DayStats
 
 mcp = FastMCP("kcal")
 
-# Each day costs one Garmin request (the daily summary), made sequentially.
-MAX_STATS_DAYS = 366
+# Each day costs one Garmin request (the daily summary), made sequentially, and
+# ~300 chars of output; 120 days stays well inside endpoints.MAX_RESULT_CHARS.
+MAX_STATS_DAYS = 120
 
 _SRC = Path(__file__).resolve().parent
 
@@ -69,6 +71,20 @@ def _no_mfa() -> str:
     )
 
 
+def _tool(fn):
+    """Register `fn` as a tool whose result goes out as one compact JSON text
+    block, replaced by a notice if it's too large. (FastMCP's default
+    pretty-prints, sends each list item as its own block, and for typed returns
+    sends everything a second time as structured content.)
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return endpoints.to_json(endpoints.cap_size(fn(*args, **kwargs)))
+
+    return mcp.tool(structured_output=False)(wrapper)
+
+
 def _day_to_dict(s: DayStats) -> dict:
     return {
         "date": s.date,
@@ -83,25 +99,25 @@ def _day_to_dict(s: DayStats) -> dict:
     }
 
 
-@mcp.tool()
+@_tool
 def get_garmin_daily_stats(
     date: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-) -> list[dict] | dict:
+) -> list[dict]:
     """Daily Garmin Connect stats: weight, steps, calories and workouts.
 
     Dates are YYYY-MM-DD. Pass `date` for one day, or `from_date` (and
     optionally `to_date`, default yesterday) for an inclusive range. With no
     arguments, returns yesterday. Calories are kcal; weight is kg (null if no
-    weigh-in that day). Ranges are limited to 366 days; split longer
+    weigh-in that day). Ranges are limited to 120 days; split longer
     ones into several calls.
     """
     days = resolve_days(date, from_date, to_date, max_days=MAX_STATS_DAYS)
-    return endpoints.cap_size([_day_to_dict(s) for s in fetch_days(days, _get_api)])
+    return [_day_to_dict(s) for s in fetch_days(days, _get_api)]
 
 
-@mcp.tool()
+@_tool
 def list_garmin_endpoints() -> list[dict]:
     """List every read-only Garmin Connect endpoint with its parameters.
 
@@ -110,7 +126,7 @@ def list_garmin_endpoints() -> list[dict]:
     return endpoints.list_endpoints()
 
 
-@mcp.tool()
+@_tool
 def call_garmin_endpoint(endpoint: str, args: dict | None = None) -> object:
     """Call any read-only Garmin Connect endpoint, e.g. `get_sleep_data`.
 
@@ -120,10 +136,10 @@ def call_garmin_endpoint(endpoint: str, args: dict | None = None) -> object:
     badges and more. Oversized results are replaced by a notice; narrow the
     request if that happens.
     """
-    return endpoints.cap_size(endpoints.call_endpoint(_get_api(), endpoint, args))
+    return endpoints.call_endpoint(_get_api(), endpoint, args)
 
 
-@mcp.tool()
+@_tool
 def get_garmin_day(date: str, metrics: list[str] | None = None) -> dict:
     """Several Garmin metrics for one day (YYYY-MM-DD) in a single call.
 
@@ -131,13 +147,15 @@ def get_garmin_day(date: str, metrics: list[str] | None = None) -> dict:
     ["sleep_data", "heart_rates", "stress_data"]. Default is a compact set:
     sleep, HRV, resting HR, training readiness/status, max metrics, hydration
     and intensity minutes. Intraday series (heart_rates, stress_data,
-    steps_data, ...) must be requested explicitly. A metric that fails reports
-    its own error without failing the others.
+    steps_data, ...) must be requested explicitly. Defaults have long lists
+    replaced by "<N items omitted>"; metrics you name in `metrics` are returned
+    in full, e.g. metrics=["sleep_data"] for the per-minute sleep lists. A
+    metric that fails reports its own error without failing the others.
     """
     return endpoints.day_metrics(_get_api(), date, metrics)
 
 
-@mcp.tool()
+@_tool
 def get_kcal_server_info() -> dict:
     """Which kcal code this server is running, and whether it is out of date.
 

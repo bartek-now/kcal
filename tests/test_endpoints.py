@@ -123,3 +123,8 @@ def test_total_cap_counts_keys_and_punctuation():
 def test_total_cap_falls_back_when_keys_alone_too_big():
     out = endpoints._fit_total({"k" * 500: 1}, limit=100)
     assert set(out) == {"error"}
+
+
+def test_cap_size_list_notice_has_item_count():
+    out = endpoints.cap_size(["x" * 100] * 10, limit=500)
+    assert out["items"] == 10 and "top_level_keys" not in out
