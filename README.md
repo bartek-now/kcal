@@ -67,7 +67,8 @@ pytest
 `kcal-mcp` runs a stdio MCP server with five tools:
 
 - `get_garmin_daily_stats` (`date`, or `from_date`/`to_date`; defaults to
-  yesterday): the same fields as the CSV plus per-workout details.
+  yesterday): the same fields as the CSV plus per-workout details. Ranges
+  are limited to 366 days.
 - `get_garmin_day` (`date`, optional `metrics`): several per-day metrics in
   one call (sleep, HRV, resting HR, training readiness/status, ...).
 - `list_garmin_endpoints`: every read-only Garmin Connect endpoint and its

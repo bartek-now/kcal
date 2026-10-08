@@ -29,6 +29,7 @@ def resolve_days(
     start: str | None,
     end: str | None,
     today: date | None = None,
+    max_days: int | None = None,
 ) -> list[date]:
     """Work out which days to fetch.
 
@@ -37,6 +38,8 @@ def resolve_days(
     - start and end: that range, inclusive.
     - none given: yesterday only.
     - end without start: an error, since there'd be no start to range from.
+
+    A range longer than `max_days` (if given) is an error.
     """
     today = today or date.today()
 
@@ -51,18 +54,30 @@ def resolve_days(
         return [_parse_date(single)]
     if start:
         last = _parse_date(end) if end else today - timedelta(days=1)
-        return _date_range(_parse_date(start), last)
+        days = _date_range(_parse_date(start), last)
+        if max_days is not None and len(days) > max_days:
+            raise ValueError(
+                f"Range is {len(days)} days; at most {max_days} can be fetched at "
+                "once. Split it into smaller ranges."
+            )
+        return days
     return [today - timedelta(days=1)]
 
 
 def fetch_days(days: list[date], login_fn=login) -> list[DayStats]:
+    """Stats for consecutive `days`. Daily summaries are one request per day;
+    activities and weigh-ins are fetched for the whole range at once.
+    """
+    if not days:
+        return []
     api = login_fn()
+    activities = fetch_activities(api, days[0], days[-1])
+    weigh_ins = fetch_weigh_ins(api, days[0], days[-1])
     results = []
     for day in days:
+        iso = day.isoformat()
         summary = fetch_day_summary(api, day)
-        activities = fetch_activities(api, day)
-        weigh_in = fetch_weigh_ins(api, day)
         results.append(
-            build_day_stats(day.isoformat(), summary, activities, weigh_in)
+            build_day_stats(iso, summary, activities.get(iso, []), weigh_ins.get(iso))
         )
     return results

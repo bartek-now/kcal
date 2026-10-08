@@ -22,6 +22,9 @@ from kcal.models import DayStats
 
 mcp = FastMCP("kcal")
 
+# Each day costs one Garmin request (the daily summary), made sequentially.
+MAX_STATS_DAYS = 366
+
 _SRC = Path(__file__).resolve().parent
 
 
@@ -85,16 +88,17 @@ def get_garmin_daily_stats(
     date: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-) -> list[dict]:
+) -> list[dict] | dict:
     """Daily Garmin Connect stats: weight, steps, calories and workouts.
 
     Dates are YYYY-MM-DD. Pass `date` for one day, or `from_date` (and
     optionally `to_date`, default yesterday) for an inclusive range. With no
     arguments, returns yesterday. Calories are kcal; weight is kg (null if no
-    weigh-in that day).
+    weigh-in that day). Ranges are limited to 366 days; split longer
+    ones into several calls.
     """
-    days = resolve_days(date, from_date, to_date)
-    return [_day_to_dict(s) for s in fetch_days(days, _get_api)]
+    days = resolve_days(date, from_date, to_date, max_days=MAX_STATS_DAYS)
+    return endpoints.cap_size([_day_to_dict(s) for s in fetch_days(days, _get_api)])
 
 
 @mcp.tool()

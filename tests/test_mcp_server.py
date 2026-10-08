@@ -52,3 +52,8 @@ def test_server_info_through_mcp():
 def test_daily_stats_errors_reach_caller():
     with pytest.raises(ToolError, match="end date needs a start date"):
         call("get_garmin_daily_stats", {"to_date": "2026-10-05"})
+
+
+def test_daily_stats_range_limited():
+    with pytest.raises(ToolError, match="at most 366"):
+        call("get_garmin_daily_stats", {"from_date": "2024-01-01", "to_date": "2025-12-31"})
