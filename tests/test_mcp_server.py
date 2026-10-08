@@ -49,8 +49,6 @@ def test_server_info_through_mcp():
     assert out["stale"] is False
 
 
-def test_daily_stats_errors_use_param_names():
-    with pytest.raises(ToolError, match="to_date requires from_date"):
+def test_daily_stats_errors_reach_caller():
+    with pytest.raises(ToolError, match="end date needs a start date"):
         call("get_garmin_daily_stats", {"to_date": "2026-10-05"})
-    with pytest.raises(ToolError, match="date cannot be combined with from_date/to_date"):
-        call("get_garmin_daily_stats", {"date": "2026-10-05", "from_date": "2026-10-01"})

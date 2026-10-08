@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import subprocess
 from dataclasses import asdict
 from datetime import date, datetime
@@ -18,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 
 from kcal import endpoints
 from kcal.auth import login
-from kcal.cli import _fetch_days, resolve_days
+from kcal.daily import fetch_days, resolve_days
 from kcal.models import DayStats
 
 mcp = FastMCP("kcal")
@@ -94,16 +93,8 @@ def get_garmin_daily_stats(
     arguments, returns yesterday. Calories are kcal; weight is kg (null if no
     weigh-in that day).
     """
-    try:
-        days = resolve_days(date, from_date, to_date)
-    except ValueError as err:
-        raise ValueError(_CLI_FLAG_RE.sub(lambda m: _CLI_FLAGS[m[0]], str(err))) from None
-    return [_day_to_dict(s) for s in _fetch_days(days, _get_api)]
-
-
-# resolve_days reports errors with CLI flag names; MCP callers know the params.
-_CLI_FLAGS = {"--date": "date", "--from": "from_date", "--to": "to_date"}
-_CLI_FLAG_RE = re.compile("(?:" + "|".join(_CLI_FLAGS) + r")\b")
+    days = resolve_days(date, from_date, to_date)
+    return [_day_to_dict(s) for s in fetch_days(days, _get_api)]
 
 
 @mcp.tool()

@@ -5,66 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
-from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from kcal.auth import login
-from kcal.client import fetch_activities, fetch_day_summary, fetch_weigh_ins
-from kcal.dedupe import build_day_stats
+from kcal.daily import fetch_days, resolve_days
 from kcal.models import DayStats
-
-
-def _parse_date(value: str) -> date:
-    return datetime.strptime(value, "%Y-%m-%d").date()
-
-
-def _date_range(start: date, end: date) -> list[date]:
-    if end < start:
-        raise ValueError("--to must not be before --from")
-    days = (end - start).days
-    return [start + timedelta(days=i) for i in range(days + 1)]
-
-
-def resolve_days(
-    date_str: str | None,
-    from_str: str | None,
-    to_str: str | None,
-    today: date | None = None,
-) -> list[date]:
-    """Work out which days to fetch from --date/--from/--to.
-
-    - --date alone: that single day.
-    - --from alone: --from through yesterday.
-    - --from and --to: that range, inclusive.
-    - none given: yesterday only.
-    - --to without --from: an error, since there'd be no start to range from.
-    """
-    today = today or date.today()
-
-    if date_str and (from_str or to_str):
-        raise ValueError("--date cannot be combined with --from/--to")
-    if to_str and not from_str:
-        raise ValueError("--to requires --from")
-
-    if date_str:
-        return [_parse_date(date_str)]
-    if from_str:
-        end = _parse_date(to_str) if to_str else today - timedelta(days=1)
-        return _date_range(_parse_date(from_str), end)
-    return [today - timedelta(days=1)]
-
-
-def _fetch_days(days: list[date], login_fn=login) -> list[DayStats]:
-    api = login_fn()
-    results = []
-    for day in days:
-        summary = fetch_day_summary(api, day)
-        activities = fetch_activities(api, day)
-        weigh_in = fetch_weigh_ins(api, day)
-        results.append(
-            build_day_stats(day.isoformat(), summary, activities, weigh_in)
-        )
-    return results
 
 
 def _render_csv(stats: list[DayStats]) -> str:
@@ -107,7 +51,7 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
 
-    stats = _fetch_days(days)
+    stats = fetch_days(days)
 
     output = _render_csv(stats)
 
