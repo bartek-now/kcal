@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 
 from kcal import endpoints
 from kcal.auth import login
-from kcal.daily import fetch_days, resolve_days
+from kcal.daily import fetch_days, fetch_weights, resolve_days
 from kcal.models import DayStats
 
 mcp = FastMCP("kcal")
@@ -26,6 +26,8 @@ mcp = FastMCP("kcal")
 # Each day costs one Garmin request (the daily summary), made sequentially, and
 # ~300 chars of output; 120 days stays well inside endpoints.MAX_RESULT_CHARS.
 MAX_STATS_DAYS = 120
+# Weigh-ins for any range are one request and ~80 chars per day.
+MAX_WEIGHT_DAYS = 366
 
 _SRC = Path(__file__).resolve().parent
 
@@ -115,6 +117,24 @@ def get_garmin_daily_stats(
     """
     days = resolve_days(date, from_date, to_date, max_days=MAX_STATS_DAYS)
     return [_day_to_dict(s) for s in fetch_days(days, _get_api)]
+
+
+@_tool
+def get_garmin_weight(
+    date: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> list[dict]:
+    """Weigh-ins from a Garmin scale: one row per day that had one, oldest first.
+
+    Same date arguments as `get_garmin_daily_stats`; ranges are limited to
+    366 days and take one Garmin request regardless of length. Each row has
+    `date`, `weight_kg`, and `body_fat_pct` / `muscle_mass_kg` when the scale
+    reports them, from the day's last weigh-in; `count` appears when there
+    were several that day. Prefer this over `get_weigh_ins` for weight trends.
+    """
+    days = resolve_days(date, from_date, to_date, max_days=MAX_WEIGHT_DAYS)
+    return fetch_weights(days, _get_api)
 
 
 @_tool

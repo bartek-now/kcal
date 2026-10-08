@@ -28,6 +28,7 @@ def test_tools_registered():
     tools = asyncio.run(mcp_server.mcp.list_tools())
     assert {t.name for t in tools} == {
         "get_garmin_daily_stats",
+        "get_garmin_weight",
         "get_garmin_day",
         "list_garmin_endpoints",
         "call_garmin_endpoint",
@@ -58,6 +59,11 @@ def test_daily_stats_errors_reach_caller():
 def test_daily_stats_range_limited():
     with pytest.raises(ToolError, match="at most 120"):
         call("get_garmin_daily_stats", {"from_date": "2024-01-01", "to_date": "2025-12-31"})
+
+
+def test_weight_range_limited():
+    with pytest.raises(ToolError, match="at most 366"):
+        call("get_garmin_weight", {"from_date": "2024-01-01", "to_date": "2025-12-31"})
 
 
 def test_results_are_one_compact_block_without_structured_copy():

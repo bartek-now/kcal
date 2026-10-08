@@ -12,16 +12,42 @@ from __future__ import annotations
 from kcal.models import DayStats, Workout
 
 
-def _latest_weight_kg(weigh_in: dict) -> float | None:
-    """Weight from the last weigh-in of the day (by timestamp), or None if
-    the scale wasn't used that day. Garmin reports weight in grams.
+def _latest_entry(weigh_in: dict) -> dict | None:
+    """The last weigh-in of the day (by timestamp), or None if the scale
+    wasn't used that day.
     """
     entries = weigh_in.get("dateWeightList") or []
-    if not entries:
-        return None
-    latest = max(entries, key=lambda e: e.get("date") or 0)
-    grams = latest.get("weight")
+    return max(entries, key=lambda e: e.get("date") or 0) if entries else None
+
+
+def _grams_to_kg(grams: float | None) -> float | None:
     return round(grams / 1000, 1) if grams is not None else None
+
+
+def _latest_weight_kg(weigh_in: dict) -> float | None:
+    """Weight from the last weigh-in of the day; Garmin reports grams."""
+    latest = _latest_entry(weigh_in)
+    return _grams_to_kg(latest.get("weight")) if latest else None
+
+
+def build_weight_row(date_str: str, weigh_in: dict) -> dict | None:
+    """Compact body composition from the day's last weigh-in, or None if
+    there was none. Fields the scale didn't report are left out; `count`
+    appears only when there were several weigh-ins that day.
+    """
+    latest = _latest_entry(weigh_in)
+    if latest is None or latest.get("weight") is None:
+        return None
+    row = {
+        "date": date_str,
+        "weight_kg": _grams_to_kg(latest["weight"]),
+        "body_fat_pct": latest.get("bodyFat"),
+        "muscle_mass_kg": _grams_to_kg(latest.get("muscleMass")),
+    }
+    count = len(weigh_in.get("dateWeightList") or [])
+    if count > 1:
+        row["count"] = count
+    return {k: v for k, v in row.items() if v is not None}
 
 
 def build_day_stats(
