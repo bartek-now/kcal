@@ -1,0 +1,92 @@
+import pytest
+
+from kcal import endpoints
+
+
+class FakeApi:
+    def get_sleep_data(self, cdate):
+        return {"date": cdate}
+
+    def get_hrv_data(self, cdate):
+        raise RuntimeError("boom")
+
+
+def test_list_endpoints_only_getters():
+    names = {e["endpoint"] for e in endpoints.list_endpoints()}
+    assert "get_sleep_data" in names
+    assert all(n.startswith("get_") for n in names)
+
+
+def test_call_rejects_non_getter():
+    with pytest.raises(ValueError, match="Unknown"):
+        endpoints.call_endpoint(FakeApi(), "download_activity", {"activity_id": "1"})
+
+
+def test_call_rejects_bad_args():
+    with pytest.raises(ValueError, match="Bad arguments"):
+        endpoints.call_endpoint(FakeApi(), "get_sleep_data", {"nope": 1})
+
+
+def test_call_passes_args():
+    out = endpoints.call_endpoint(FakeApi(), "get_sleep_data", {"cdate": "2026-10-05"})
+    assert out == {"date": "2026-10-05"}
+
+
+def test_cap_size_replaces_large_result():
+    out = endpoints.cap_size({"a": "x" * 100}, limit=10)
+    assert "error" in out and out["top_level_keys"] == ["a"]
+
+
+def test_day_metrics_isolates_errors():
+    out = endpoints.day_metrics(FakeApi(), "2026-10-05", ["sleep_data", "hrv_data", "bogus"])
+    assert out["sleep_data"] == {"date": "2026-10-05"}
+    assert "boom" in out["hrv_data"]["error"]
+    assert "Unknown metric" in out["bogus"]["error"]
+
+
+def test_default_day_metrics_are_valid():
+    assert set(endpoints.DEFAULT_DAY_METRICS) <= set(endpoints.single_day_metrics())
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["add_weigh_in", "delete_weigh_ins", "upload_activity", "set_blood_pressure",
+     "download_activity", "__class__", "login", "garth"],
+)
+def test_real_garmin_rejects_non_getters(name):
+    from garminconnect import Garmin
+
+    with pytest.raises(ValueError, match="Unknown"):
+        endpoints.call_endpoint(Garmin("a", "b"), name, {})
+
+
+def test_no_getter_name_looks_like_a_write():
+    names = {e["endpoint"] for e in endpoints.list_endpoints()}
+    assert not [n for n in names if any(w in n for w in ("add_", "delete", "upload", "set_"))]
+
+
+def test_summarize_drops_long_lists_keeps_scalars():
+    data = {"score": 80, "series": list(range(100)), "nested": {"short": [1, 2], "long": [{}] * 50}}
+    out = endpoints.summarize(data)
+    assert out["score"] == 80 and out["nested"]["short"] == [1, 2]
+    assert "100 items omitted" in out["series"]
+    assert "50 items omitted" in out["nested"]["long"]
+
+
+class BigApi:
+    def get_sleep_data(self, cdate):
+        return {"summary": 1, "movement": list(range(5000))}
+
+    def get_hrv_data(self, cdate):
+        return {"x": "y" * 300_000}
+
+
+def test_default_day_metrics_are_summarized_and_total_capped():
+    api = BigApi()
+    # explicit request keeps raw series
+    raw = endpoints.day_metrics(api, "d", ["sleep_data"])
+    assert len(raw["sleep_data"]["movement"]) == 5000
+    # total cap replaces the oversized metric
+    capped = endpoints.day_metrics(api, "d", ["sleep_data", "hrv_data"])
+    assert "Omitted" in capped["hrv_data"]["error"]
+    assert capped["sleep_data"]["summary"] == 1

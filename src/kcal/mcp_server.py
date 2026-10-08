@@ -6,16 +6,57 @@ first so the session token (and any MFA code) is cached under ~/.kcal.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import subprocess
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from kcal import endpoints
 from kcal.auth import login
 from kcal.cli import _fetch_days, resolve_days
 from kcal.models import DayStats
 
 mcp = FastMCP("kcal")
+
+_SRC = Path(__file__).resolve().parent
+
+
+def _code_hash() -> str:
+    """Short hash of the package's .py files as they are on disk right now."""
+    h = hashlib.sha256()
+    for f in sorted(_SRC.glob("*.py")):
+        h.update(f.name.encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
+def _git_commit() -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "describe", "--always", "--dirty"],
+            cwd=_SRC, capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+_LOADED_HASH = _code_hash()
+_LOADED_COMMIT = _git_commit()
+_STARTED = datetime.now().astimezone().isoformat(timespec="seconds")
+
+_api = None
+
+
+def _get_api():
+    """Log in once per server process and reuse the session."""
+    global _api
+    if _api is None:
+        _api = login(prompt_mfa=_no_mfa)
+    return _api
 
 
 def _no_mfa() -> str:
@@ -53,7 +94,61 @@ def get_garmin_daily_stats(
     weigh-in that day).
     """
     days = resolve_days(date, from_date, to_date)
-    return [_day_to_dict(s) for s in _fetch_days(days, lambda: login(prompt_mfa=_no_mfa))]
+    return [_day_to_dict(s) for s in _fetch_days(days, _get_api)]
+
+
+@mcp.tool()
+def list_garmin_endpoints() -> list[dict]:
+    """List every read-only Garmin Connect endpoint with its parameters.
+
+    Use the names with `call_garmin_endpoint`. Dates are YYYY-MM-DD strings.
+    """
+    return endpoints.list_endpoints()
+
+
+@mcp.tool()
+def call_garmin_endpoint(endpoint: str, args: dict | None = None) -> object:
+    """Call any read-only Garmin Connect endpoint, e.g. `get_sleep_data`.
+
+    `args` maps parameter names to values, e.g. {"cdate": "2026-10-05"} (see
+    `list_garmin_endpoints`). Covers sleep, heart rate, HRV, stress, body
+    battery, SpO2, training status, activities and splits, devices, goals,
+    badges and more. Oversized results are replaced by a notice; narrow the
+    request if that happens.
+    """
+    return endpoints.cap_size(endpoints.call_endpoint(_get_api(), endpoint, args))
+
+
+@mcp.tool()
+def get_garmin_day(date: str, metrics: list[str] | None = None) -> dict:
+    """Several Garmin metrics for one day (YYYY-MM-DD) in a single call.
+
+    `metrics` are single-date endpoint names without the `get_` prefix, e.g.
+    ["sleep_data", "heart_rates", "stress_data"]. Default is a compact set:
+    sleep, HRV, resting HR, training readiness/status, max metrics, hydration
+    and intensity minutes. Intraday series (heart_rates, stress_data,
+    steps_data, ...) must be requested explicitly. A metric that fails reports
+    its own error without failing the others.
+    """
+    return endpoints.day_metrics(_get_api(), date, metrics)
+
+
+@mcp.tool()
+def get_kcal_server_info() -> dict:
+    """Which kcal code this server is running, and whether it is out of date.
+
+    `stale: true` means the code on disk changed after this server started;
+    fully quit and reopen the client to load it.
+    """
+    on_disk = _code_hash()
+    return {
+        "loaded_code": _LOADED_HASH,
+        "loaded_git": _LOADED_COMMIT,
+        "on_disk_code": on_disk,
+        "stale": on_disk != _LOADED_HASH,
+        "started": _STARTED,
+        "pid": os.getpid(),
+    }
 
 
 def main() -> None:
