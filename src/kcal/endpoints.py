@@ -80,8 +80,8 @@ def cap_size(result: Any, limit: int = MAX_RESULT_CHARS) -> Any:
     if size <= limit:
         return result
     notice: dict[str, Any] = {
-        "error": f"Result is {size:,} chars (limit {limit:,}). About "
-        f"{limit / size:.0%} of it would fit; narrow the date range by that much "
+        "error": f"Result is {size:,} chars (limit {limit:,}); only about "
+        f"{limit / size:.0%} of it fits. Shrink the date range to that fraction "
         "and split the rest into further calls, or use a different endpoint.",
     }
     if isinstance(result, list):
