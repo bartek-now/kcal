@@ -17,25 +17,25 @@ import sys
 import threading
 from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import anyio
 import uvicorn
+from garminconnect import GarminConnectAuthenticationError
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from starlette.requests import Request
-from starlette.responses import PlainTextResponse
 
 from kcal import endpoints
 from kcal.auth import GarminLoginError, login
 from kcal.daily import fetch_days, fetch_weights, resolve_days
 from kcal.http_log import LogClientErrors
+from kcal.login_page import LoginPage
 from kcal.models import DayStats
 from kcal.oauth import KcalOAuthProvider, auth_settings
-from kcal.settings import HttpSettings, state_dir
+from kcal.settings import HttpSettings, garmin_token_store, state_dir
 
 # Filled by @_tool; build_server() registers them on each FastMCP instance.
 _TOOLS = []
@@ -47,6 +47,8 @@ class _Exposure:
 
     allowed: frozenset[str] | None  # endpoint names without `get_`; None = all
     scrub: Callable[[Any], Any]
+    # Where the owner refreshes an expired Garmin session (HTTP with OAuth).
+    login_url: str | None = None
 
 
 LOCAL = _Exposure(allowed=None, scrub=lambda result: result)
@@ -101,8 +103,39 @@ def _get_api():
             try:
                 _api = login(prompt_mfa=_no_mfa)
             except Exception as err:
-                raise GarminLoginError(str(err)) from err
+                raise _login_error(err) from err
     return _api
+
+
+def _reset_api() -> None:
+    """Forget the cached Garmin session (new tokens were saved, or Garmin
+    rejected the current ones); the next call logs in again.
+    """
+    global _api
+    with _api_lock:
+        _api = None
+
+
+def _login_error(err: Exception) -> GarminLoginError:
+    url = _exposure.get().login_url
+    if url is None:
+        return GarminLoginError(str(err))
+    return GarminLoginError(garmin_expired_message(url))
+
+
+def garmin_expired_message(login_url: str) -> str:
+    """The only cue the owner gets, read by a model that knows nothing about
+    kcal, so it says everything (design section 3).
+    """
+    return (
+        "Garmin session expired, so kcal can't read Garmin data right now. "
+        "Nothing is wrong with the connector. "
+        f"To fix it, open {login_url} and sign in to Garmin (enter the "
+        "verification code if Garmin asks for one). "
+        "Then ask again; there's no need to reconnect the connector. "
+        "Assistant: show this link to the user and wait for them to sign in; "
+        "retrying before that will fail the same way."
+    )
 
 
 class _Garmin:
@@ -147,6 +180,10 @@ def _wrap(fn, exposure: _Exposure):
         token = _exposure.set(exposure)
         try:
             result = exposure.scrub(fn(**kwargs))
+        except GarminConnectAuthenticationError as err:
+            # Garmin rejected the session mid-call (expired or revoked).
+            _reset_api()
+            raise _login_error(err) from err
         finally:
             _exposure.reset(token)
         return endpoints.to_json(endpoints.cap_size(result))
@@ -299,28 +336,18 @@ def build_server(
             ),
         )
     if oauth is not None:
-        if http is None:
-            raise ValueError("OAuth needs HTTP settings (the public URL)")
+        if http is None or http.garmin_owner is None:
+            raise ValueError("OAuth needs HTTP settings with the public URL and Garmin owner")
         kwargs.update(auth_server_provider=oauth, auth=auth_settings(http.public_url))
     server = FastMCP("kcal", **kwargs)
-    if oauth is not None:
-        _add_login_routes(server, oauth)
     exposure = LOCAL if http is None else REMOTE
+    if oauth is not None:
+        page = LoginPage(oauth, http.garmin_owner, garmin_token_store(), on_login=_reset_api)
+        server.custom_route("/login", methods=["GET", "POST"])(page.handle)
+        exposure = replace(REMOTE, login_url=f"{http.public_url}/login")
     for fn in _TOOLS:
         server.tool(structured_output=False)(_wrap(fn, exposure))
     return server
-
-
-def _add_login_routes(server: FastMCP, oauth: KcalOAuthProvider) -> None:
-    @server.custom_route("/login", methods=["GET", "POST"])
-    async def login_page(request: Request):
-        # Placeholder until the Garmin login page (build step 4).
-        return PlainTextResponse(
-            "The kcal login page isn't built yet, so connecting a client with "
-            "authentication isn't possible yet.",
-            status_code=503,
-            headers={"Cache-Control": "no-store"},
-        )
 
 
 mcp = build_server()
@@ -345,9 +372,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Local port to listen on, on 127.0.0.1 (default: $KCAL_PORT or 8000)",
     )
     parser.add_argument(
-        "--no-auth", action="store_true",
-        help="Serve --http without OAuth, so anyone with the URL can read your "
-        "Garmin data. Only for short tests until the login page exists",
+        "--garmin-owner", metavar="ID",
+        help="Garmin profile ID allowed to sign in (default: $KCAL_GARMIN_OWNER; "
+        "`kcal whoami` prints yours)",
     )
     parser.add_argument(
         "--revoke-all", action="store_true",
@@ -365,24 +392,24 @@ def main(argv: list[str] | None = None) -> int:
         mcp.run()
         return 0
     try:
-        http = HttpSettings.from_env(public_url=args.public_url, port=args.port)
+        http = HttpSettings.from_env(
+            public_url=args.public_url, port=args.port, garmin_owner=args.garmin_owner
+        )
+        if http.garmin_owner is None:
+            raise ValueError(
+                "HTTP mode needs the Garmin account allowed to sign in: set "
+                "KCAL_GARMIN_OWNER or pass --garmin-owner (run `kcal whoami` to "
+                "get your profile ID)"
+            )
     except ValueError as e:
         print(f"kcal-mcp: {e}", file=sys.stderr)
         return 2
-    oauth = None
-    if not args.no_auth:
-        oauth = KcalOAuthProvider(state_dir() / "mcp_auth.sqlite", http.public_url)
+    oauth = KcalOAuthProvider(state_dir() / "mcp_auth.sqlite", http.public_url)
     print(
-        f"kcal-mcp: serving {http.public_url}/mcp from 127.0.0.1:{http.port} "
-        + ("with OAuth" if oauth else "WITHOUT authentication"),
+        f"kcal-mcp: serving {http.public_url}/mcp from 127.0.0.1:{http.port}; "
+        f"clients sign in at {http.public_url}/login",
         file=sys.stderr,
     )
-    if oauth:
-        print(
-            "kcal-mcp: note: the login page isn't built yet, so clients can't "
-            "finish connecting; use --no-auth for short tests until it is.",
-            file=sys.stderr,
-        )
     serve_http(build_server(http, oauth))
     return 0
 

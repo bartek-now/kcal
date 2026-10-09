@@ -206,6 +206,7 @@ def runs(monkeypatch, tmp_path):
     )
     monkeypatch.delenv("KCAL_PUBLIC_URL", raising=False)
     monkeypatch.delenv("KCAL_PORT", raising=False)
+    monkeypatch.delenv("KCAL_GARMIN_OWNER", raising=False)
     return calls
 
 
@@ -214,34 +215,45 @@ def test_main_defaults_to_stdio(runs):
     assert runs == [(mcp_server.mcp, "stdio")]
 
 
-def test_main_http_uses_oauth_by_default(runs, capsys, tmp_path):
-    assert mcp_server.main(["--http", "--public-url", PUBLIC]) == 0
+def test_main_http_always_uses_oauth(runs, capsys, tmp_path):
+    assert mcp_server.main(["--http", "--public-url", PUBLIC, "--garmin-owner", "42"]) == 0
     [(server, transport)] = runs
     assert transport == "streamable-http"
     assert server.settings.auth is not None
     assert str(server.settings.auth.issuer_url).rstrip("/") == PUBLIC
     assert (tmp_path / "mcp_auth.sqlite").exists()
+    assert f"clients sign in at {PUBLIC}/login" in capsys.readouterr().err
+
+
+def test_main_http_has_no_unauthenticated_mode(runs):
+    with pytest.raises(SystemExit):
+        mcp_server.main(["--http", "--no-auth", "--public-url", PUBLIC, "--garmin-owner", "42"])
+    assert runs == []
+
+
+def test_main_http_requires_owner(runs, capsys):
+    assert mcp_server.main(["--http", "--public-url", PUBLIC]) == 2
+    assert runs == []
     err = capsys.readouterr().err
-    assert "with OAuth" in err and "login page isn't built yet" in err
+    assert "KCAL_GARMIN_OWNER" in err and "kcal whoami" in err
 
 
-def test_main_http_no_auth_skips_oauth(runs, capsys, tmp_path):
-    assert mcp_server.main(["--http", "--no-auth", "--public-url", PUBLIC]) == 0
-    [(server, _)] = runs
-    assert server.settings.auth is None
-    assert not (tmp_path / "mcp_auth.sqlite").exists()
-    assert "WITHOUT authentication" in capsys.readouterr().err
+def test_main_http_rejects_non_numeric_owner(runs, capsys, monkeypatch):
+    monkeypatch.setenv("KCAL_GARMIN_OWNER", "bartek")
+    assert mcp_server.main(["--http", "--public-url", PUBLIC]) == 2
+    assert "profile ID" in capsys.readouterr().err
 
 
 def test_main_http_reports_bad_settings(runs, capsys):
-    assert mcp_server.main(["--http", "--no-auth"]) == 2
+    assert mcp_server.main(["--http"]) == 2
     assert runs == []
     assert "KCAL_PUBLIC_URL" in capsys.readouterr().err
 
 
 def test_main_http_runs_streamable_http(runs, monkeypatch):
     monkeypatch.setenv("KCAL_PUBLIC_URL", PUBLIC)
-    assert mcp_server.main(["--http", "--no-auth", "--port", "8123"]) == 0
+    monkeypatch.setenv("KCAL_GARMIN_OWNER", "42")
+    assert mcp_server.main(["--http", "--port", "8123"]) == 0
     [(server, transport)] = runs
     assert transport == "streamable-http"
     assert server.settings.port == 8123

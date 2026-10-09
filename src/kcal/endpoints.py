@@ -14,7 +14,7 @@ import re
 from collections.abc import Collection
 from typing import Any
 
-from garminconnect import Garmin
+from garminconnect import Garmin, GarminConnectAuthenticationError
 
 from kcal.auth import GarminLoginError
 
@@ -233,7 +233,7 @@ def day_metrics(
             result = getattr(api, f"get_{m}")(day)
             hint = f'pass metrics=["{m}"] for the full list'
             out[m] = summarize(result, hint=hint) if slim else result
-        except GarminLoginError:
+        except (GarminLoginError, GarminConnectAuthenticationError):
             raise  # affects every metric: fail the call once, don't retry per metric
         except Exception as err:  # one failing metric shouldn't sink the rest
             out[m] = {"error": f"{type(err).__name__}: {err}"}

@@ -7,6 +7,7 @@ import csv
 import sys
 from pathlib import Path
 
+from kcal.auth import login
 from kcal.daily import fetch_days, resolve_days
 from kcal.models import DayStats
 
@@ -62,6 +63,13 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_whoami(args: argparse.Namespace) -> int:
+    profile = login().client.connectapi("/userprofile-service/socialProfile")
+    print(f"profile ID:   {profile['profileId']}")
+    print(f"display name: {profile.get('displayName', '')}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kcal")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -84,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch.add_argument("--output", help="Write to this file instead of stdout")
     fetch.set_defaults(func=_cmd_fetch)
+
+    whoami = subparsers.add_parser(
+        "whoami", help="Show the logged-in Garmin account (its profile ID is KCAL_GARMIN_OWNER)"
+    )
+    whoami.set_defaults(func=_cmd_whoami)
 
     return parser
 

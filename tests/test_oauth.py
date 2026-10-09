@@ -18,6 +18,7 @@ from kcal.settings import HttpSettings
 PUBLIC = "https://abc-def.trycloudflare.com"
 RESOURCE = PUBLIC + "/mcp"
 REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+OWNER = 12345
 MCP_HEADERS = {
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",
@@ -45,7 +46,7 @@ def provider(db):
 
 @pytest.fixture
 def client(provider):
-    server = mcp_server.build_server(HttpSettings(public_url=PUBLIC), provider)
+    server = mcp_server.build_server(HttpSettings(public_url=PUBLIC, garmin_owner=OWNER), provider)
     with TestClient(server.streamable_http_app(), base_url=PUBLIC) as c:
         yield c
 
@@ -321,7 +322,7 @@ def test_clients_and_tokens_survive_a_restart(client, provider, db):
     client_id, tokens = connect(client, provider)
     provider.close()
     reopened = KcalOAuthProvider(db, PUBLIC)
-    server = mcp_server.build_server(HttpSettings(public_url=PUBLIC), reopened)
+    server = mcp_server.build_server(HttpSettings(public_url=PUBLIC, garmin_owner=OWNER), reopened)
     with TestClient(server.streamable_http_app(), base_url=PUBLIC) as c:
         assert mcp_call(c, tokens["access_token"]).status_code == 200
         assert refresh(c, client_id, tokens["refresh_token"]).status_code == 200
@@ -342,12 +343,12 @@ def test_tokens_carry_the_owner(client, provider):
     assert loaded.subject == "owner" and loaded.resource == RESOURCE
 
 
-# --- the login page placeholder (built in step 4) ------------------------------------
+# --- the login page route ------------------------------------------------------------
 
 
-def test_login_page_placeholder(client):
-    r = client.get("/login?req=x")
-    assert r.status_code == 503
+def test_login_page_is_served(client):
+    r = client.get("/login")
+    assert r.status_code == 200
     assert r.headers["cache-control"] == "no-store"
 
 
@@ -450,6 +451,8 @@ def test_deny_ignores_expired_request(client, provider, monkeypatch):
 
 
 def test_oauth_needs_http_settings(provider):
+    with pytest.raises(ValueError, match="needs HTTP settings"):
+        mcp_server.build_server(HttpSettings(public_url=PUBLIC), provider)
     with pytest.raises(ValueError, match="needs HTTP settings"):
         mcp_server.build_server(oauth=provider)
 
