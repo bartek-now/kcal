@@ -93,14 +93,16 @@ def cap_size(result: Any, limit: int = MAX_RESULT_CHARS) -> Any:
     return notice
 
 
-def summarize(value: Any, max_list: int = SUMMARY_MAX_LIST) -> Any:
-    """Recursively replace long lists (intraday series) with an omission marker."""
+def summarize(value: Any, max_list: int = SUMMARY_MAX_LIST, hint: str = "") -> Any:
+    """Recursively replace long lists (intraday series) with an omission marker,
+    followed by `hint` (how to get the full data) if given.
+    """
     if isinstance(value, dict):
-        return {k: summarize(v, max_list) for k, v in value.items()}
+        return {k: summarize(v, max_list, hint) for k, v in value.items()}
     if isinstance(value, list):
         if len(value) > max_list:
-            return f"<{len(value)} items omitted>"
-        return [summarize(v, max_list) for v in value]
+            return f"<{len(value)} items omitted{'; ' + hint if hint else ''}>"
+        return [summarize(v, max_list, hint) for v in value]
     return value
 
 
@@ -125,7 +127,8 @@ def day_metrics(api: Garmin, day: str, metrics: list[str] | None = None) -> dict
             continue
         try:
             result = getattr(api, f"get_{m}")(day)
-            out[m] = summarize(result) if slim else result
+            hint = f'pass metrics=["{m}"] for the full list'
+            out[m] = summarize(result, hint=hint) if slim else result
         except Exception as err:  # one failing metric shouldn't sink the rest
             out[m] = {"error": f"{type(err).__name__}: {err}"}
     return _fit_total(out)

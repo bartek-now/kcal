@@ -111,6 +111,13 @@ def test_default_day_metrics_are_summarized_and_total_capped():
     assert capped["sleep_data"]["summary"] == 1
 
 
+def test_default_omission_marker_says_how_to_get_full_list():
+    out = endpoints.day_metrics(BigApi(), "d")
+    assert out["sleep_data"]["movement"] == (
+        '<5000 items omitted; pass metrics=["sleep_data"] for the full list>'
+    )
+
+
 def test_empty_metrics_selection_stays_empty():
     assert endpoints.day_metrics(FakeApi(), "d", []) == {"date": "d"}
 
