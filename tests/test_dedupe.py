@@ -148,3 +148,14 @@ def test_weight_row_omits_unreported_fields():
 
 def test_weight_row_none_without_weigh_in():
     assert build_weight_row("2026-07-06", {"dateWeightList": []}) is None
+
+
+def test_latest_weigh_in_falls_back_to_gmt_timestamp():
+    weigh_in = {
+        "dateWeightList": [
+            {"timestampGMT": 1, "weight": 71000.0},
+            {"timestampGMT": 2, "weight": 70200.0},  # later - wins
+        ]
+    }
+    stats = build_day_stats("2026-07-06", SUMMARY, [], weigh_in)
+    assert stats.weight_kg == 70.2

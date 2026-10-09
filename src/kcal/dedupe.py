@@ -17,7 +17,9 @@ def _latest_entry(weigh_in: dict) -> dict | None:
     wasn't used that day.
     """
     entries = weigh_in.get("dateWeightList") or []
-    return max(entries, key=lambda e: e.get("date") or 0) if entries else None
+    if not entries:
+        return None
+    return max(entries, key=lambda e: e.get("date") or e.get("timestampGMT") or 0)
 
 
 def _grams_to_kg(grams: float | None) -> float | None:

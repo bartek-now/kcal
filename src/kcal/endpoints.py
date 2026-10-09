@@ -81,8 +81,9 @@ def cap_size(result: Any, limit: int = MAX_RESULT_CHARS) -> Any:
         return result
     notice: dict[str, Any] = {
         "error": f"Result is {size:,} chars (limit {limit:,}); only about "
-        f"{limit / size:.0%} of it fits. Shrink the date range to that fraction "
-        "and split the rest into further calls, or use a different endpoint.",
+        f"{limit / size:.0%} of it fits. Request less (a shorter date range, "
+        "fewer items, or a narrower endpoint) and split the rest into further "
+        "calls.",
     }
     if isinstance(result, list):
         notice["items"] = len(result)
@@ -140,9 +141,14 @@ def _fit_total(out: dict, limit: int = MAX_RESULT_CHARS) -> dict:
     for k in sorted(sizes, key=sizes.get, reverse=True):
         if len(to_json(out)) <= limit:
             return out
+        advice = (
+            "request this metric on its own"
+            if sizes[k] <= limit
+            else "it is too large to return even on its own"
+        )
         out[k] = {
             "error": f"Omitted: {sizes[k]:,} chars would exceed the {limit:,} "
-            "char response limit; request this metric on its own."
+            f"char response limit; {advice}."
         }
     if len(to_json(out)) <= limit:
         return out

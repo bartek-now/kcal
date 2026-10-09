@@ -107,7 +107,7 @@ def test_default_day_metrics_are_summarized_and_total_capped():
     assert len(raw["sleep_data"]["movement"]) == 5000
     # total cap replaces the oversized metric
     capped = endpoints.day_metrics(api, "d", ["sleep_data", "hrv_data"])
-    assert "Omitted" in capped["hrv_data"]["error"]
+    assert "too large to return even on its own" in capped["hrv_data"]["error"]
     assert capped["sleep_data"]["summary"] == 1
 
 
@@ -135,3 +135,9 @@ def test_total_cap_falls_back_when_keys_alone_too_big():
 def test_cap_size_list_notice_has_item_count():
     out = endpoints.cap_size(["x" * 100] * 10, limit=500)
     assert out["items"] == 10 and "top_level_keys" not in out
+
+
+def test_total_cap_suggests_requesting_alone_when_that_fits():
+    out = endpoints._fit_total({"a": "x" * 400, "b": "y" * 400}, limit=600)
+    omitted = [v for v in out.values() if isinstance(v, dict)]
+    assert omitted and "request this metric on its own" in omitted[0]["error"]
