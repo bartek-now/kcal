@@ -103,10 +103,10 @@ Claude Desktop / Claude Code config (stdio):
 `kcal-mcp --http` serves the same tools over Streamable HTTP at `/mcp` on
 `127.0.0.1`, for remote clients such as claude.ai and ChatGPT reaching it
 through a tunnel. See [docs/http-server-design.md](docs/http-server-design.md).
-Over HTTP, `call_garmin_endpoint`, `list_garmin_endpoints` and
-`get_garmin_day` only reach an allowlist of health and fitness endpoints
-(`REMOTE_ALLOWED` in `endpoints.py`), and location data (coordinates, GPS
-tracks, place names) is stripped from every result. Authentication isn't
+Over HTTP, the tools only reach an allowlist of health and fitness endpoints
+(`REMOTE_ALLOWED` in `endpoints.py`), and location and identity data
+(coordinates, GPS tracks, place names, your name and profile photo) is
+stripped from every result. Authentication isn't
 built yet, so for now it refuses to start without `--no-auth`. Only use it
 for short tests.
 

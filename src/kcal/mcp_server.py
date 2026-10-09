@@ -28,7 +28,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from kcal import endpoints
-from kcal.auth import login
+from kcal.auth import GarminLoginError, login
 from kcal.daily import fetch_days, fetch_weights, resolve_days
 from kcal.http_log import LogClientErrors
 from kcal.models import DayStats
@@ -47,8 +47,10 @@ class _Exposure:
 
 
 LOCAL = _Exposure(allowed=None, scrub=lambda result: result)
-REMOTE = _Exposure(allowed=endpoints.REMOTE_ALLOWED, scrub=endpoints.strip_location)
-_exposure: ContextVar[_Exposure] = ContextVar("kcal_exposure", default=LOCAL)
+REMOTE = _Exposure(allowed=endpoints.REMOTE_ALLOWED, scrub=endpoints.strip_private)
+# Fails closed: code running outside a tool wrapper gets the remote rules.
+# stdio tools unlock LOCAL explicitly in _wrap().
+_exposure: ContextVar[_Exposure] = ContextVar("kcal_exposure", default=REMOTE)
 
 # Each day costs one Garmin request (the daily summary), made sequentially, and
 # ~300 chars of output; 120 days stays well inside endpoints.MAX_RESULT_CHARS.
@@ -93,17 +95,25 @@ def _get_api():
     global _api
     with _api_lock:
         if _api is None:
-            _api = login(prompt_mfa=_no_mfa)
+            try:
+                _api = login(prompt_mfa=_no_mfa)
+            except Exception as err:
+                raise GarminLoginError(str(err)) from err
     return _api
 
 
-class _LazyApi:
-    """Stands in for the Garmin API and logs in on first use, so a call
-    rejected before touching it (e.g. not allowed remotely) makes no Garmin
-    request at all.
+class _Garmin:
+    """What tools use instead of the Garmin API: the one place the current
+    exposure's allowlist is enforced, for every tool. Logs in on first use,
+    so a rejected call makes no Garmin request, not even a login.
     """
 
     def __getattr__(self, name):
+        allowed = _exposure.get().allowed
+        if allowed is not None and not (
+            name.startswith("get_") and name.removeprefix("get_") in allowed
+        ):
+            raise ValueError(f"Garmin {name!r} is not available remotely.")
         return getattr(_get_api(), name)
 
 
@@ -174,7 +184,7 @@ def get_garmin_daily_stats(
     ones into several calls.
     """
     days = resolve_days(date, from_date, to_date, max_days=MAX_STATS_DAYS)
-    return [_day_to_dict(s) for s in fetch_days(days, _get_api)]
+    return [_day_to_dict(s) for s in fetch_days(days, _Garmin)]
 
 
 @_tool
@@ -192,7 +202,7 @@ def get_garmin_weight(
     were several that day. Prefer this over `get_weigh_ins` for weight trends.
     """
     days = resolve_days(date, from_date, to_date, max_days=MAX_WEIGHT_DAYS)
-    return fetch_weights(days, _get_api)
+    return fetch_weights(days, _Garmin)
 
 
 @_tool
@@ -216,7 +226,7 @@ def call_garmin_endpoint(endpoint: str, args: dict | None = None) -> object:
     endpoints, without location data). Oversized results are replaced by a
     notice; narrow the request if that happens.
     """
-    return endpoints.call_endpoint(_LazyApi(), endpoint, args, _exposure.get().allowed)
+    return endpoints.call_endpoint(_Garmin(), endpoint, args, _exposure.get().allowed)
 
 
 @_tool
@@ -232,7 +242,7 @@ def get_garmin_day(date: str, metrics: list[str] | None = None) -> dict:
     in full, e.g. metrics=["sleep_data"] for the per-minute sleep lists. A
     metric that fails reports its own error without failing the others.
     """
-    return endpoints.day_metrics(_LazyApi(), date, metrics, _exposure.get().allowed)
+    return endpoints.day_metrics(_Garmin(), date, metrics, _exposure.get().allowed)
 
 
 @_tool

@@ -3,17 +3,20 @@
 Every public `get_*` method on `garminconnect.Garmin` is exposed by name. Only
 getters are allowed, so nothing that downloads, writes or deletes is reachable.
 Over HTTP, only the endpoints in REMOTE_ALLOWED are reachable, and results go
-through strip_location().
+through strip_private().
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import re
 from collections.abc import Collection
 from typing import Any
 
 from garminconnect import Garmin
+
+from kcal.auth import GarminLoginError
 
 # Compact per-day summaries; the intraday series (heart_rates, stress_data,
 # steps_data, ...) are large and must be requested explicitly.
@@ -67,9 +70,18 @@ REMOTE_ALLOWED = frozenset({
 })
 
 # Results sent over HTTP drop every key whose name contains one of these
-# (case-insensitive): coordinates, GPS tracks and place names reveal where
-# the owner lives and trains.
-LOCATION_KEY_PARTS = ("latitude", "longitude", "polyline", "geo", "location")
+# words: coordinates, GPS tracks and place names reveal where the owner lives
+# and trains; names, profile photos and e-mail identify them. Keys are split
+# into words (camelCase or snake_case) and compared whole, so e.g.
+# `averageOxygen` doesn't match `geo`.
+PRIVATE_KEY_WORDS = frozenset({
+    "latitude", "longitude", "polyline", "geo", "location",
+    "owner", "fullname", "displayname", "email",
+})
+# ...or one of these consecutive word pairs.
+PRIVATE_KEY_PHRASES = frozenset({
+    ("full", "name"), ("display", "name"), ("profile", "image"), ("user", "info"),
+})
 
 
 def _getters() -> dict[str, Any]:
@@ -166,16 +178,24 @@ def summarize(value: Any, max_list: int = SUMMARY_MAX_LIST, hint: str = "") -> A
     return value
 
 
-def strip_location(value: Any) -> Any:
-    """Recursively drop keys named like LOCATION_KEY_PARTS."""
+def _key_words(key: str) -> list[str]:
+    """`ownerFullName` -> ["owner", "full", "name"]; `user_info` -> ["user", "info"]."""
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key).replace("_", " ").lower().split()
+
+
+def is_private_key(key: Any) -> bool:
+    words = _key_words(str(key))
+    return bool(PRIVATE_KEY_WORDS.intersection(words)) or any(
+        pair in PRIVATE_KEY_PHRASES for pair in zip(words, words[1:])
+    )
+
+
+def strip_private(value: Any) -> Any:
+    """Recursively drop keys that are private (see PRIVATE_KEY_WORDS)."""
     if isinstance(value, dict):
-        return {
-            k: strip_location(v)
-            for k, v in value.items()
-            if not any(part in str(k).lower() for part in LOCATION_KEY_PARTS)
-        }
+        return {k: strip_private(v) for k, v in value.items() if not is_private_key(k)}
     if isinstance(value, list):
-        return [strip_location(v) for v in value]
+        return [strip_private(v) for v in value]
     return value
 
 
@@ -213,6 +233,8 @@ def day_metrics(
             result = getattr(api, f"get_{m}")(day)
             hint = f'pass metrics=["{m}"] for the full list'
             out[m] = summarize(result, hint=hint) if slim else result
+        except GarminLoginError:
+            raise  # affects every metric: fail the call once, don't retry per metric
         except Exception as err:  # one failing metric shouldn't sink the rest
             out[m] = {"error": f"{type(err).__name__}: {err}"}
     return _fit_total(out)
