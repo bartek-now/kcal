@@ -91,6 +91,30 @@ def test_settings_allow_http_on_localhost(url):
     assert HttpSettings.from_env({"KCAL_PUBLIC_URL": url}).public_url == url
 
 
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://abc.trycloudflare.com:443", "https://abc.trycloudflare.com"),
+        ("http://localhost:80", "http://localhost"),
+        ("http://[::1]:80", "http://[::1]"),
+        ("https://abc.trycloudflare.com:8443", "https://abc.trycloudflare.com:8443"),
+    ],
+)
+def test_settings_drop_default_ports(url, expected):
+    # Clients omit default ports from Host/Origin, which must match exactly.
+    s = HttpSettings.from_env({"KCAL_PUBLIC_URL": url})
+    assert s.public_url == expected
+    assert s.public_host == expected.split("://")[1]
+
+
+def test_default_port_url_accepts_real_host_header():
+    server = mcp_server.build_server(
+        HttpSettings.from_env({"KCAL_PUBLIC_URL": PUBLIC + ":443"})
+    )
+    with TestClient(server.streamable_http_app(), base_url=PUBLIC) as c:
+        assert post(c, INIT).status_code == 200
+
+
 @pytest.mark.parametrize("port", ["abc", "0", "70000"])
 def test_settings_reject_bad_ports(port):
     with pytest.raises(ValueError, match="KCAL_PORT"):
@@ -157,7 +181,8 @@ def test_public_origin_allowed(client):
 
 
 def test_foreign_origin_rejected(client):
-    assert post(client, INIT, Origin="https://evil.example").status_code == 403
+    # MCP SDK 1.10-1.14 answer 400 here; later versions 403.
+    assert post(client, INIT, Origin="https://evil.example").status_code in (400, 403)
 
 
 def test_stdio_server_has_no_http_settings():
@@ -173,6 +198,9 @@ def runs(monkeypatch):
     monkeypatch.setattr(
         mcp_server.FastMCP, "run",
         lambda self, transport="stdio", **_: calls.append((self, transport)),
+    )
+    monkeypatch.setattr(
+        mcp_server, "serve_http", lambda server: calls.append((server, "streamable-http"))
     )
     monkeypatch.delenv("KCAL_PUBLIC_URL", raising=False)
     monkeypatch.delenv("KCAL_PORT", raising=False)
@@ -204,3 +232,61 @@ def test_main_http_runs_streamable_http(runs, monkeypatch):
     assert server.settings.port == 8123
     assert server.settings.host == "127.0.0.1"
     assert server.settings.stateless_http and server.settings.json_response
+
+
+# --- rejection logging ------------------------------------------------------
+
+
+@pytest.fixture
+def logged_client(caplog):
+    server = mcp_server.build_server(HttpSettings(public_url=PUBLIC))
+    app = mcp_server.LogClientErrors(server.streamable_http_app())
+    caplog.set_level("WARNING", logger="kcal.http")
+    with TestClient(app, base_url=PUBLIC) as c:
+        yield c
+
+
+def rejections(caplog):
+    return [r.getMessage() for r in caplog.records if r.name == "kcal.http"]
+
+
+LIST = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+
+
+def test_logs_why_a_request_was_rejected(logged_client, caplog):
+    # The SDK checks the version header on every request but initialize.
+    r = post(logged_client, LIST, **{"MCP-Protocol-Version": "1999-01-01"})
+    assert r.status_code == 400
+    [line] = rejections(caplog)
+    assert line.startswith("POST /mcp -> 400: Bad Request: Unsupported protocol version: 1999-01-01")
+    assert "mcp-protocol-version=1999-01-01" in line
+    assert "content-type=application/json" in line
+
+
+def test_logs_malformed_body(logged_client, caplog):
+    r = logged_client.post("/mcp", content=b"{not json", headers=HEADERS)
+    assert r.status_code == 400
+    [line] = rejections(caplog)
+    assert "-> 400: Parse error" in line
+
+
+def test_logs_rejected_host(logged_client, caplog):
+    assert post(logged_client, INIT, Host="evil.example").status_code == 421
+    [line] = rejections(caplog)
+    assert "-> 421: Invalid Host header" in line
+
+
+def test_never_logs_credentials(logged_client, caplog):
+    post(
+        logged_client, LIST,
+        **{"MCP-Protocol-Version": "1999-01-01", "Authorization": "Bearer s3cret",
+           "Cookie": "session=s3cret"},
+    )
+    [line] = rejections(caplog)
+    assert "s3cret" not in line and "authorization" not in line.lower()
+
+
+def test_does_not_log_success_or_404(logged_client, caplog):
+    assert post(logged_client, INIT).status_code == 200
+    assert logged_client.get("/.well-known/oauth-protected-resource").status_code == 404
+    assert rejections(caplog) == []

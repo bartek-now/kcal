@@ -20,12 +20,14 @@ from datetime import date, datetime
 from pathlib import Path
 
 import anyio
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from kcal import endpoints
 from kcal.auth import login
 from kcal.daily import fetch_days, fetch_weights, resolve_days
+from kcal.http_log import LogClientErrors
 from kcal.models import DayStats
 from kcal.settings import HttpSettings
 
@@ -297,8 +299,20 @@ def main(argv: list[str] | None = None) -> int:
         "WITHOUT authentication",
         file=sys.stderr,
     )
-    build_server(http).run(transport="streamable-http")
+    serve_http(build_server(http))
     return 0
+
+
+def serve_http(server: FastMCP) -> None:
+    """Like `server.run(transport="streamable-http")`, but logs why requests
+    were rejected (see kcal.http_log).
+    """
+    uvicorn.run(
+        LogClientErrors(server.streamable_http_app()),
+        host=server.settings.host,
+        port=server.settings.port,
+        log_level=server.settings.log_level.lower(),
+    )
 
 
 if __name__ == "__main__":
