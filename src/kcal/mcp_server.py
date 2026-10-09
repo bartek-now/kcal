@@ -15,9 +15,12 @@ import os
 import subprocess
 import sys
 import threading
-from dataclasses import asdict
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import anyio
 import uvicorn
@@ -33,6 +36,19 @@ from kcal.settings import HttpSettings
 
 # Filled by @_tool; build_server() registers them on each FastMCP instance.
 _TOOLS = []
+
+
+@dataclass(frozen=True)
+class _Exposure:
+    """What a server's tools may reach and how their results are filtered."""
+
+    allowed: frozenset[str] | None  # endpoint names without `get_`; None = all
+    scrub: Callable[[Any], Any]
+
+
+LOCAL = _Exposure(allowed=None, scrub=lambda result: result)
+REMOTE = _Exposure(allowed=endpoints.REMOTE_ALLOWED, scrub=endpoints.strip_location)
+_exposure: ContextVar[_Exposure] = ContextVar("kcal_exposure", default=LOCAL)
 
 # Each day costs one Garmin request (the daily summary), made sequentially, and
 # ~300 chars of output; 120 days stays well inside endpoints.MAX_RESULT_CHARS.
@@ -81,6 +97,16 @@ def _get_api():
     return _api
 
 
+class _LazyApi:
+    """Stands in for the Garmin API and logs in on first use, so a call
+    rejected before touching it (e.g. not allowed remotely) makes no Garmin
+    request at all.
+    """
+
+    def __getattr__(self, name):
+        return getattr(_get_api(), name)
+
+
 def _no_mfa() -> str:
     raise RuntimeError(
         "Garmin login needs an MFA code or fresh credentials. Run `kcal fetch` "
@@ -89,22 +115,33 @@ def _no_mfa() -> str:
 
 
 def _tool(fn):
-    """Register `fn` as a tool whose result goes out as one compact JSON text
+    """Mark `fn` as a tool; build_server() registers it via _wrap()."""
+    _TOOLS.append(fn)
+    return fn
+
+
+def _wrap(fn, exposure: _Exposure):
+    """The tool as registered: its result goes out as one compact JSON text
     block, replaced by a notice if it's too large. (FastMCP's default
     pretty-prints, sends each list item as its own block, and for typed returns
     sends everything a second time as structured content.) `fn` runs in a
     worker thread: FastMCP calls sync tools on its event loop, so a slow
-    Garmin request would otherwise stall every other request.
+    Garmin request would otherwise stall every other request. While it runs,
+    `_exposure` holds the server's policy, and the result is scrubbed with it.
     """
 
     def run(**kwargs):
-        return endpoints.to_json(endpoints.cap_size(fn(**kwargs)))
+        token = _exposure.set(exposure)
+        try:
+            result = exposure.scrub(fn(**kwargs))
+        finally:
+            _exposure.reset(token)
+        return endpoints.to_json(endpoints.cap_size(result))
 
     @functools.wraps(fn)
     async def wrapper(**kwargs):
         return await anyio.to_thread.run_sync(functools.partial(run, **kwargs))
 
-    _TOOLS.append(wrapper)
     return wrapper
 
 
@@ -163,8 +200,9 @@ def list_garmin_endpoints() -> list[dict]:
     """List every read-only Garmin Connect endpoint with its parameters.
 
     Use the names with `call_garmin_endpoint`. Dates are YYYY-MM-DD strings.
+    Over a remote connection, only health and fitness endpoints are listed.
     """
-    return endpoints.list_endpoints()
+    return endpoints.list_endpoints(_exposure.get().allowed)
 
 
 @_tool
@@ -174,10 +212,11 @@ def call_garmin_endpoint(endpoint: str, args: dict | None = None) -> object:
     `args` maps parameter names to values, e.g. {"cdate": "2026-10-05"} (see
     `list_garmin_endpoints`). Covers sleep, heart rate, HRV, stress, body
     battery, SpO2, training status, activities and splits, devices, goals,
-    badges and more. Oversized results are replaced by a notice; narrow the
-    request if that happens.
+    badges and more (over a remote connection, only health and fitness
+    endpoints, without location data). Oversized results are replaced by a
+    notice; narrow the request if that happens.
     """
-    return endpoints.call_endpoint(_get_api(), endpoint, args)
+    return endpoints.call_endpoint(_LazyApi(), endpoint, args, _exposure.get().allowed)
 
 
 @_tool
@@ -193,7 +232,7 @@ def get_garmin_day(date: str, metrics: list[str] | None = None) -> dict:
     in full, e.g. metrics=["sleep_data"] for the per-minute sleep lists. A
     metric that fails reports its own error without failing the others.
     """
-    return endpoints.day_metrics(_get_api(), date, metrics)
+    return endpoints.day_metrics(_LazyApi(), date, metrics, _exposure.get().allowed)
 
 
 @_tool
@@ -216,7 +255,9 @@ def get_kcal_server_info() -> dict:
 
 def build_server(http: HttpSettings | None = None) -> FastMCP:
     """A FastMCP server with every tool. With `http`, it's set up to be
-    served over Streamable HTTP on 127.0.0.1, reached through `http.public_url`.
+    served over Streamable HTTP on 127.0.0.1, reached through `http.public_url`,
+    and its tools only reach REMOTE_ALLOWED endpoints, with location data
+    stripped from every result.
     """
     kwargs = {}
     if http is not None:
@@ -242,8 +283,9 @@ def build_server(http: HttpSettings | None = None) -> FastMCP:
             ),
         )
     server = FastMCP("kcal", **kwargs)
+    exposure = LOCAL if http is None else REMOTE
     for fn in _TOOLS:
-        server.tool(structured_output=False)(fn)
+        server.tool(structured_output=False)(_wrap(fn, exposure))
     return server
 
 

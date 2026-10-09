@@ -78,7 +78,7 @@ def test_results_are_one_compact_block_without_structured_copy():
 
 def test_oversized_list_reports_item_count(monkeypatch):
     monkeypatch.setattr(
-        mcp_server.endpoints, "call_endpoint", lambda api, e, a: ["x" * 1000] * 100
+        mcp_server.endpoints, "call_endpoint", lambda api, e, a, allowed: ["x" * 1000] * 100
     )
     out = call("call_garmin_endpoint", {"endpoint": "get_sleep_data"})
     assert out["items"] == 100 and "50%" in out["error"]
@@ -89,7 +89,7 @@ def test_tools_run_off_the_event_loop(monkeypatch):
     seen = []
     monkeypatch.setattr(
         mcp_server.endpoints, "call_endpoint",
-        lambda api, e, a: seen.append(threading.get_ident()) or {},
+        lambda api, e, a, allowed: seen.append(threading.get_ident()) or {},
     )
     call("call_garmin_endpoint", {"endpoint": "get_sleep_data"})
     assert seen and seen[0] != loop_thread

@@ -1,8 +1,8 @@
 # Remote (HTTP) MCP server — design
 
-Status: agreed in discussion 2026-10-09. Built so far: step 1 (HTTP
-transport, settings). Everything else, including authentication and the
-remote exposure rules in section 5, is still planned; see "Build order".
+Status: agreed in discussion 2026-10-09. Built so far: steps 1 and 2 (HTTP
+transport, settings, remote exposure rules). Everything else, including
+authentication, is still planned; see "Build order".
 
 ## Goal
 
@@ -158,8 +158,6 @@ starts the server is a possible convenience later.
 
 ## 5. Remote exposure
 
-*Planned (build step 2); until then HTTP mode exposes the same tools as stdio.*
-
 In HTTP mode, `call_garmin_endpoint`, `list_garmin_endpoints` and the
 `metrics` of `get_garmin_day` only accept allowlisted endpoints; anything else
 fails with "not available remotely". stdio stays unrestricted.
@@ -195,10 +193,11 @@ challenges, golf, training plans, `goals`,
 `menstrual_*` and `pregnancy_summary`.
 
 **Location stripping:** activity summaries and splits carry start/end
-coordinates (`startLatitude`, `endLongitude`, …), which reveal where the owner
-lives. In HTTP mode every result passes through a filter that drops keys
-whose name contains `latitude`, `longitude`, `polyline` or `geo`
-(case-insensitive), recursively.
+coordinates (`startLatitude`, `endLongitude`, …), and `get_activity` has a
+place name (`locationName`); these reveal where the owner lives. In HTTP mode
+every result passes through a filter that drops keys whose name contains
+`latitude`, `longitude`, `polyline`, `geo` or `location` (case-insensitive),
+recursively. Elevation and time zone are left in: they're coarse.
 
 The allowlist lives in `endpoints.py` as one explicit set, so new
 `garminconnect` getters are blocked remotely until added on purpose.
