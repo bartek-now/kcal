@@ -86,7 +86,7 @@ pytest
 `kcal fetch` output is unchanged. Login is non-interactive, so run
 `kcal fetch` once in a terminal first to cache the session token.
 
-Claude Desktop / Claude Code config:
+Claude Desktop / Claude Code config (stdio):
 
 ```json
 {
@@ -97,3 +97,18 @@ Claude Desktop / Claude Code config:
   }
 }
 ```
+
+### Over HTTP (work in progress)
+
+`kcal-mcp --http` serves the same tools over Streamable HTTP at `/mcp` on
+`127.0.0.1`, for remote clients such as claude.ai and ChatGPT reaching it
+through a tunnel. See [docs/http-server-design.md](docs/http-server-design.md).
+Authentication isn't built yet, so for now it refuses to start without
+`--no-auth`, and it exposes everything stdio does, including
+`call_garmin_endpoint` without restrictions. Only use it for short tests.
+
+| Setting | Flag | Default |
+|---|---|---|
+| `KCAL_PUBLIC_URL` | `--public-url` | required, e.g. `https://abc.trycloudflare.com` |
+| `KCAL_PORT` | `--port` | `8000` |
+| `KCAL_STATE_DIR` | | `~/.kcal` (Garmin tokens, shared with `kcal fetch`) |

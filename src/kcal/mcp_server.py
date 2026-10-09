@@ -1,29 +1,38 @@
 """MCP server exposing Garmin daily steps/calories/weight as a tool.
 
-Runs over stdio. Login is non-interactive: run `kcal fetch` once in a terminal
-first so the session token (and any MFA code) is cached under ~/.kcal.
+Runs over stdio by default, or over Streamable HTTP with `--http` (see
+docs/http-server-design.md). Login is non-interactive: run `kcal fetch` once
+in a terminal first so the session token (and any MFA code) is cached under
+KCAL_STATE_DIR (default ~/.kcal).
 """
 
 from __future__ import annotations
 
+import argparse
 import functools
 import hashlib
 import os
 import subprocess
+import sys
 import threading
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 
 import anyio
+import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from kcal import endpoints
 from kcal.auth import login
 from kcal.daily import fetch_days, fetch_weights, resolve_days
+from kcal.http_log import LogClientErrors
 from kcal.models import DayStats
+from kcal.settings import HttpSettings
 
-mcp = FastMCP("kcal")
+# Filled by @_tool; build_server() registers them on each FastMCP instance.
+_TOOLS = []
 
 # Each day costs one Garmin request (the daily summary), made sequentially, and
 # ~300 chars of output; 120 days stays well inside endpoints.MAX_RESULT_CHARS.
@@ -95,7 +104,8 @@ def _tool(fn):
     async def wrapper(**kwargs):
         return await anyio.to_thread.run_sync(functools.partial(run, **kwargs))
 
-    return mcp.tool(structured_output=False)(wrapper)
+    _TOOLS.append(wrapper)
+    return wrapper
 
 
 def _day_to_dict(s: DayStats) -> dict:
@@ -204,9 +214,106 @@ def get_kcal_server_info() -> dict:
     }
 
 
-def main() -> None:
-    mcp.run()
+def build_server(http: HttpSettings | None = None) -> FastMCP:
+    """A FastMCP server with every tool. With `http`, it's set up to be
+    served over Streamable HTTP on 127.0.0.1, reached through `http.public_url`.
+    """
+    kwargs = {}
+    if http is not None:
+        kwargs = dict(
+            host="127.0.0.1",
+            port=http.port,
+            # No MCP sessions: each request stands alone, so server restarts
+            # don't strand clients. Replies are plain JSON, not SSE streams,
+            # since tools send no progress or log messages.
+            stateless_http=True,
+            json_response=True,
+            # FastMCP only allows localhost Host/Origin headers on 127.0.0.1,
+            # which would reject requests arriving through the tunnel.
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=[
+                    http.public_host, "127.0.0.1:*", "localhost:*", "[::1]:*",
+                ],
+                allowed_origins=[
+                    http.public_url,
+                    "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+                ],
+            ),
+        )
+    server = FastMCP("kcal", **kwargs)
+    for fn in _TOOLS:
+        server.tool(structured_output=False)(fn)
+    return server
+
+
+mcp = build_server()
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="kcal-mcp",
+        description="Garmin MCP server. Runs over stdio unless --http is given.",
+    )
+    parser.add_argument(
+        "--http", action="store_true",
+        help="Serve Streamable HTTP at <public URL>/mcp instead of stdio",
+    )
+    parser.add_argument(
+        "--public-url", metavar="URL",
+        help="Public base URL clients use, e.g. https://abc.trycloudflare.com "
+        "(default: $KCAL_PUBLIC_URL)",
+    )
+    parser.add_argument(
+        "--port", metavar="N",
+        help="Local port to listen on, on 127.0.0.1 (default: $KCAL_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--no-auth", action="store_true",
+        help="Required with --http until OAuth is implemented: acknowledges "
+        "that anyone with the URL can read your Garmin data",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    if not args.http:
+        mcp.run()
+        return 0
+    if not args.no_auth:
+        print(
+            "kcal-mcp: --http has no authentication yet, so anyone with the "
+            "URL could read your Garmin data. Pass --no-auth to run it anyway "
+            "(e.g. for a short smoke test).",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        http = HttpSettings.from_env(public_url=args.public_url, port=args.port)
+    except ValueError as e:
+        print(f"kcal-mcp: {e}", file=sys.stderr)
+        return 2
+    print(
+        f"kcal-mcp: serving {http.public_url}/mcp from 127.0.0.1:{http.port} "
+        "WITHOUT authentication",
+        file=sys.stderr,
+    )
+    serve_http(build_server(http))
+    return 0
+
+
+def serve_http(server: FastMCP) -> None:
+    """Like `server.run(transport="streamable-http")`, but logs why requests
+    were rejected (see kcal.http_log).
+    """
+    uvicorn.run(
+        LogClientErrors(server.streamable_http_app()),
+        host=server.settings.host,
+        port=server.settings.port,
+        log_level=server.settings.log_level.lower(),
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
