@@ -221,7 +221,8 @@ def test_main_http_uses_oauth_by_default(runs, capsys, tmp_path):
     assert server.settings.auth is not None
     assert str(server.settings.auth.issuer_url).rstrip("/") == PUBLIC
     assert (tmp_path / "mcp_auth.sqlite").exists()
-    assert "with OAuth" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "with OAuth" in err and "login page isn't built yet" in err
 
 
 def test_main_http_no_auth_skips_oauth(runs, capsys, tmp_path):

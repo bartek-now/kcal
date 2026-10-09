@@ -359,3 +359,120 @@ def test_provider_hides_tokens_from_other_clients(client, provider):
     mine = asyncio.run(provider.get_client(client_id))
     assert asyncio.run(provider.load_refresh_token(other, tokens["refresh_token"])) is None
     assert asyncio.run(provider.load_refresh_token(mine, tokens["refresh_token"])) is not None
+
+
+# --- review fixes -------------------------------------------------------------------
+
+
+def test_replayed_refresh_token_ends_the_whole_chain(client, provider):
+    client_id, first = connect(client, provider)
+    second = refresh(client, client_id, first["refresh_token"]).json()
+    # The first refresh token comes back (stolen, or replayed): refused, and
+    # the tokens issued from it stop working too.
+    r = refresh(client, client_id, first["refresh_token"])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
+    assert mcp_call(client, second["access_token"]).status_code == 401
+    assert refresh(client, client_id, second["refresh_token"]).status_code == 400
+
+
+def test_chain_survives_several_rotations(client, provider):
+    client_id, tokens = connect(client, provider)
+    for _ in range(3):
+        tokens = refresh(client, client_id, tokens["refresh_token"]).json()
+    assert mcp_call(client, tokens["access_token"]).status_code == 200
+    r = client.post("/revoke", data={
+        "token": tokens["refresh_token"], "client_id": client_id, "client_secret": "",
+    })
+    assert r.status_code == 200
+    assert mcp_call(client, tokens["access_token"]).status_code == 401
+
+
+def test_code_single_use_enforced_by_provider(client, provider):
+    import asyncio
+    client_id, code, _ = authorized_code(client, provider)
+    c = asyncio.run(provider.get_client(client_id))
+    loaded = asyncio.run(provider.load_authorization_code(c, code))
+    asyncio.run(provider.exchange_authorization_code(c, loaded))
+    with pytest.raises(oauth.TokenError):
+        asyncio.run(provider.exchange_authorization_code(c, loaded))
+
+
+def test_pending_requests_are_capped(client, provider, monkeypatch):
+    monkeypatch.setattr(oauth, "MAX_PENDING", 3)
+    client_id = register(client)
+    ids = [
+        query(start_authorize(client, client_id, pkce()[1]).headers["location"])["req"]
+        for _ in range(5)
+    ]
+    assert len(provider._pending) == 3
+    assert provider.pending(ids[0]) is None and provider.pending(ids[-1]) is not None
+
+
+def test_unused_clients_are_forgotten_after_a_day(client, provider, monkeypatch):
+    import asyncio
+    used, _ = connect(client, provider)
+    unused = register(client)
+    later = time.time() + oauth.UNUSED_CLIENT_SECONDS + 1
+    monkeypatch.setattr(oauth.time, "time", lambda: later)
+    register(client)  # registration prunes
+    assert asyncio.run(provider.get_client(unused)) is None
+    assert asyncio.run(provider.get_client(used)) is not None
+
+
+def test_registration_stops_at_the_limit(client, monkeypatch):
+    monkeypatch.setattr(oauth, "MAX_CLIENTS", 2)
+    register(client)
+    register(client)
+    r = client.post("/register", json={
+        "redirect_uris": [REDIRECT], "token_endpoint_auth_method": "none",
+    })
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_client_metadata"
+
+
+def test_resource_matches_regardless_of_host_case(client, provider):
+    client_id = register(client)
+    r = start_authorize(client, client_id, pkce()[1], resource="HTTPS://ABC-DEF.trycloudflare.COM/mcp/")
+    assert r.headers["location"].startswith(PUBLIC + "/login?req=")
+
+
+def test_public_url_host_is_lowercased():
+    s = HttpSettings.from_env({"KCAL_PUBLIC_URL": "https://Abc-DEF.trycloudflare.com"})
+    assert s.public_url == PUBLIC
+
+
+def test_deny_ignores_expired_request(client, provider, monkeypatch):
+    client_id = register(client)
+    request_id = query(start_authorize(client, client_id, pkce()[1]).headers["location"])["req"]
+    later = time.time() + oauth.PENDING_SECONDS + 1
+    monkeypatch.setattr(oauth.time, "time", lambda: later)
+    assert provider.deny_authorization(request_id) is None
+
+
+def test_oauth_needs_http_settings(provider):
+    with pytest.raises(ValueError, match="needs HTTP settings"):
+        mcp_server.build_server(oauth=provider)
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX permissions")
+def test_state_is_owner_only(tmp_path):
+    import os
+    db = tmp_path / "state" / "mcp_auth.sqlite"
+    KcalOAuthProvider(db, PUBLIC).close()
+    assert os.stat(db.parent).st_mode & 0o077 == 0
+    assert os.stat(db).st_mode & 0o077 == 0
+
+
+def test_revoke_all_command(client, provider, db, monkeypatch, capsys):
+    _, tokens = connect(client, provider)
+    monkeypatch.setenv("KCAL_STATE_DIR", str(db.parent))
+    assert mcp_server.main(["--revoke-all"]) == 0
+    assert "signed out 1 client authorization" in capsys.readouterr().err
+    assert mcp_call(client, tokens["access_token"]).status_code == 401
+
+
+def test_revoke_all_command_without_database(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("KCAL_STATE_DIR", str(tmp_path))
+    assert mcp_server.main(["--revoke-all"]) == 0
+    assert "nothing to revoke" in capsys.readouterr().err
+    assert not (tmp_path / "mcp_auth.sqlite").exists()

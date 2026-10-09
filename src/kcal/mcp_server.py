@@ -299,6 +299,8 @@ def build_server(
             ),
         )
     if oauth is not None:
+        if http is None:
+            raise ValueError("OAuth needs HTTP settings (the public URL)")
         kwargs.update(auth_server_provider=oauth, auth=auth_settings(http.public_url))
     server = FastMCP("kcal", **kwargs)
     if oauth is not None:
@@ -347,11 +349,18 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Serve --http without OAuth, so anyone with the URL can read your "
         "Garmin data. Only for short tests until the login page exists",
     )
+    parser.add_argument(
+        "--revoke-all", action="store_true",
+        help="Sign every connected client out (they log in again), then exit. "
+        "Works while the server is running",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.revoke_all:
+        return _revoke_all()
     if not args.http:
         mcp.run()
         return 0
@@ -368,7 +377,27 @@ def main(argv: list[str] | None = None) -> int:
         + ("with OAuth" if oauth else "WITHOUT authentication"),
         file=sys.stderr,
     )
+    if oauth:
+        print(
+            "kcal-mcp: note: the login page isn't built yet, so clients can't "
+            "finish connecting; use --no-auth for short tests until it is.",
+            file=sys.stderr,
+        )
     serve_http(build_server(http, oauth))
+    return 0
+
+
+def _revoke_all() -> int:
+    db = state_dir() / "mcp_auth.sqlite"
+    if not db.exists():
+        print(f"kcal-mcp: no OAuth database at {db}; nothing to revoke.", file=sys.stderr)
+        return 0
+    provider = KcalOAuthProvider(db, public_url="")
+    try:
+        ended = provider.revoke_all()
+    finally:
+        provider.close()
+    print(f"kcal-mcp: signed out {ended} client authorization(s).", file=sys.stderr)
     return 0
 
 

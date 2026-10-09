@@ -104,7 +104,7 @@ put in front later without restructuring it.
 | Token | Lifetime | Notes |
 |---|---|---|
 | Access token | 1 hour | Opaque random string; stored hashed. |
-| Refresh token | 30 days, rotated on use | Client refreshes silently; a full re-login is needed only after 30 days of no use or a revoke. |
+| Refresh token | 30 days, rotated on use | Client refreshes silently; a full re-login is needed only after 30 days of no use or a revoke. A rotated token that comes back again (stolen or replayed) ends the whole chain of tokens from that login. |
 | Authorization code | 5 minutes, single use | |
 
 All stored in one SQLite file (`KCAL_STATE_DIR/mcp_auth.sqlite`): registered
@@ -245,9 +245,16 @@ The allowlist lives in `endpoints.py` as one explicit set, so new
 - Garmin tokens and `mcp_auth.sqlite` on disk are what protect the data;
   `KCAL_STATE_DIR` should only be readable by the owner.
 - One shared Garmin session; re-login replaces it under the existing lock.
-- Revoking all access: delete `mcp_auth.sqlite` and restart (signs clients
-  out and forgets their registrations), or call the provider's
-  `revoke_all()` (tokens only; a `kcal revoke-all` command could wrap it).
+- Revoking all access: `kcal-mcp --revoke-all` signs every client out,
+  even while the server runs (clients stay registered and just log in
+  again). Deleting `mcp_auth.sqlite` and restarting also forgets the
+  registrations.
+- `/register` and `/authorize` are open to anyone with the URL, so what they
+  can make the server keep is bounded: at most 100 waiting authorizations
+  (oldest dropped), clients that never got a token are forgotten after a
+  day, and registration stops at 500 clients.
+- `KCAL_STATE_DIR` is created owner-only (0700) and `mcp_auth.sqlite` is
+  0600 where the OS supports it (on Windows the user profile's ACLs apply).
 - The OAuth scope is `garmin:read`. Registration is open to any client, as
   the MCP spec expects; what protects the data is that tokens are only
   issued after the owner logs in on `/login`. That page should therefore
