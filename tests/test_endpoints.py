@@ -141,3 +141,9 @@ def test_total_cap_suggests_requesting_alone_when_that_fits():
     out = endpoints._fit_total({"a": "x" * 400, "b": "y" * 400}, limit=600)
     omitted = [v for v in out.values() if isinstance(v, dict)]
     assert omitted and "request this metric on its own" in omitted[0]["error"]
+
+
+def test_total_cap_counts_date_and_key_in_solo_size():
+    # The value alone fits in 300 chars, but {"date":..., "a": value} doesn't.
+    out = endpoints._fit_total({"date": "2026-10-05", "a": "x" * 280, "b": 1}, limit=300)
+    assert "too large to return even on its own" in str(out)

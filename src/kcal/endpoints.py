@@ -141,9 +141,10 @@ def _fit_total(out: dict, limit: int = MAX_RESULT_CHARS) -> dict:
     for k in sorted(sizes, key=sizes.get, reverse=True):
         if len(to_json(out)) <= limit:
             return out
+        solo = len(to_json({"date": out.get("date"), k: out[k]}))
         advice = (
             "request this metric on its own"
-            if sizes[k] <= limit
+            if solo <= limit
             else "it is too large to return even on its own"
         )
         out[k] = {
