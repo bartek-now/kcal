@@ -1,6 +1,8 @@
 # Remote (HTTP) MCP server — design
 
-Status: draft, agreed in discussion 2026-10-09. Nothing here is built yet.
+Status: agreed in discussion 2026-10-09. Built so far: step 1 (HTTP
+transport, settings). Everything else, including authentication and the
+remote exposure rules in section 5, is still planned; see "Build order".
 
 ## Goal
 
@@ -155,6 +157,8 @@ tied to the old URL). A launcher that starts `cloudflared`, reads the URL and
 starts the server is a possible convenience later.
 
 ## 5. Remote exposure
+
+*Planned (build step 2); until then HTTP mode exposes the same tools as stdio.*
 
 In HTTP mode, `call_garmin_endpoint`, `list_garmin_endpoints` and the
 `metrics` of `get_garmin_day` only accept allowlisted endpoints; anything else

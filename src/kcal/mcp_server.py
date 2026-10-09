@@ -3,7 +3,7 @@
 Runs over stdio by default, or over Streamable HTTP with `--http` (see
 docs/http-server-design.md). Login is non-interactive: run `kcal fetch` once
 in a terminal first so the session token (and any MFA code) is cached under
-~/.kcal.
+KCAL_STATE_DIR (default ~/.kcal).
 """
 
 from __future__ import annotations

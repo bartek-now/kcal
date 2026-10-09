@@ -59,11 +59,29 @@ def test_settings_require_public_url():
         "https://abc.trycloudflare.com/mcp",  # path
         "https://abc.trycloudflare.com?x=1",  # query
         "https://",  # no host
+        "https://abc.trycloudflare.com:notaport",  # malformed port
+        "https://abc.trycloudflare.com:70000",  # port out of range
     ],
 )
 def test_settings_reject_bad_urls(url):
     with pytest.raises(ValueError, match="KCAL_PUBLIC_URL"):
         HttpSettings.from_env({"KCAL_PUBLIC_URL": url})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:secret@abc.trycloudflare.com",
+        "https://user@abc.trycloudflare.com",
+        # Would fail other checks too, whose messages echo the URL.
+        "http://user:secret@abc.trycloudflare.com",
+        "https://user:secret@abc.trycloudflare.com:notaport/mcp",
+    ],
+)
+def test_settings_reject_credentials_without_echoing_them(url):
+    with pytest.raises(ValueError, match="user name or password") as err:
+        HttpSettings.from_env({"KCAL_PUBLIC_URL": url})
+    assert "secret" not in str(err.value) and "user@" not in str(err.value)
 
 
 @pytest.mark.parametrize(

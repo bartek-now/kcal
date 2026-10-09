@@ -60,11 +60,18 @@ class HttpSettings:
 
 def _check_url(url: str) -> str:
     parts = urlsplit(url.strip())
+    # First, so no message below echoes credentials into the log.
+    if "@" in parts.netloc:
+        raise ValueError("KCAL_PUBLIC_URL must not contain a user name or password")
     local = parts.hostname in _LOCAL_HOSTS
     if parts.scheme != "https" and not (parts.scheme == "http" and local):
         raise ValueError(
             f"KCAL_PUBLIC_URL must be https:// (http:// only for localhost): {url!r}"
         )
+    try:
+        parts.port  # raises for a non-numeric or out-of-range port
+    except ValueError:
+        raise ValueError(f"KCAL_PUBLIC_URL has an invalid port: {url!r}") from None
     if not parts.hostname or parts.path not in ("", "/") or parts.query or parts.fragment:
         raise ValueError(
             f"KCAL_PUBLIC_URL must be just scheme and host, e.g. "
