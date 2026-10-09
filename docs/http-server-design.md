@@ -118,6 +118,7 @@ file; skipping the copy costs one reconnect per client.
 | MCP access token expired | 401 | Nothing; the client refreshes it. |
 | MCP refresh failed / revoked | 401 with `WWW-Authenticate: Bearer error="invalid_token", error_description=…, resource_metadata=…` | The client's own "reconnect" prompt. The description is filled in but clients don't show it, so it's not relied on. |
 | **Garmin tokens expired or revoked** | Normal tool result, `isError: true` | The model relays: *"Garmin session expired. Open https://…/login, sign in, then ask again."* |
+| Garmin unreachable or rate-limiting | Normal tool result, `isError: true` | "Try again in a few minutes", with no login link: signing in again wouldn't help and would spend sign-in attempts. |
 
 The Garmin-expiry error is the owner's only cue, so it must be actionable on
 its own, read by a model that knows nothing about kcal:

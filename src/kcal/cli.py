@@ -7,7 +7,7 @@ import csv
 import sys
 from pathlib import Path
 
-from kcal.auth import login
+from kcal.auth import garmin_profile_id, login
 from kcal.daily import fetch_days, resolve_days
 from kcal.models import DayStats
 
@@ -64,9 +64,9 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def _cmd_whoami(args: argparse.Namespace) -> int:
-    profile = login().client.connectapi("/userprofile-service/socialProfile")
-    print(f"profile ID:   {profile['profileId']}")
-    print(f"display name: {profile.get('displayName', '')}")
+    api = login()
+    print(f"profile ID:   {garmin_profile_id(api)}")
+    print(f"display name: {getattr(api, 'display_name', None) or ''}")
     return 0
 
 

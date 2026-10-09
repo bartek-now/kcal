@@ -406,8 +406,146 @@ def test_whoami_prints_profile_id(monkeypatch, capsys):
 
     class Api:
         client = Client()
+        display_name = "owner-display"
 
     monkeypatch.setattr(cli, "login", lambda: Api())
     assert cli.main(["whoami"]) == 0
     out = capsys.readouterr().out
     assert f"profile ID:   {OWNER}" in out and "owner-display" in out
+
+
+# --- review fixes ------------------------------------------------------------------------
+
+
+def test_sign_in_always_checks_the_password(monkeypatch, tmp_path):
+    # Even with a token store configured, the form's email and password are
+    # what logs in: garminconnect's Garmin.login() would load GARMINTOKENS
+    # and skip them.
+    monkeypatch.setenv("GARMINTOKENS", str(tmp_path))
+    seen = []
+
+    class Client:
+        def login(self, email, password, return_on_mfa=False):
+            seen.append((email, password, return_on_mfa))
+            return "needs_mfa", None
+
+    class StubGarmin:
+        def __init__(self, **_):
+            self.client = Client()
+
+        def login(self, *_, **__):
+            pytest.fail("Garmin.login() would consult the token store")
+
+    monkeypatch.setattr(login_page, "Garmin", StubGarmin)
+    _, needs_mfa = login_page.GarminGateway().start(EMAIL, PASSWORD)
+    assert seen == [(EMAIL, PASSWORD, True)] and needs_mfa
+
+
+def test_parallel_attempts_cannot_exceed_the_cap(garmin, provider, state):
+    import threading
+
+    import httpx
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    release = threading.Event()
+    original = garmin.start
+
+    def slow_start(email, password):
+        release.wait(5)
+        return original(email, password)
+
+    garmin.start = slow_start
+    page = login_page.LoginPage(provider, OWNER, state / "garmin_tokens", lambda: None, garmin)
+    app = Starlette(routes=[Route("/login", page.handle, methods=["GET", "POST"])])
+
+    async def attack():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url=PUBLIC, cookies={login_page.CSRF_COOKIE: "t"}
+        ) as c:
+            data = {"csrf": "t", "email": EMAIL, "password": "guess", "action": "signin"}
+            tasks = [asyncio.create_task(c.post("/login", data=data)) for _ in range(20)]
+            await asyncio.sleep(0.5)  # all requests are in: let Garmin answer
+            release.set()
+            return await asyncio.gather(*tasks)
+
+    responses = asyncio.run(attack())
+    # Only as many reach Garmin as the cap allows; the rest wait it out.
+    assert len(garmin.calls) == login_page.MAX_FAILURES
+    assert len([r for r in responses if r.status_code == 429]) == 20 - login_page.MAX_FAILURES
+
+
+def test_lockout_keeps_a_waiting_mfa_step(garmin, provider, state):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    page = login_page.LoginPage(provider, OWNER, state / "garmin_tokens", lambda: None, garmin)
+    app = Starlette(routes=[Route("/login", page.handle, methods=["GET", "POST"])])
+    with TestClient(app, base_url=PUBLIC) as c:
+        flow = flow_id(sign_in(c, email="mfa@example.com").text)
+        page._failures.extend([time.time()] * login_page.MAX_FAILURES)
+        data = {"csrf": c.cookies.get(login_page.CSRF_COOKIE), "flow": flow,
+                "code": "123456", "action": "mfa"}
+        assert c.post("/login", data=data).status_code == 429
+        page._failures.clear()  # the pause ends
+        r = c.post("/login", data=data)
+        assert "Garmin session refreshed" in r.text  # the same code still works
+
+
+def test_incomplete_session_is_not_saved(client, garmin, state):
+    def save(session, token_store):
+        raise login_page.IncompleteSession("no refresh token")
+
+    garmin.save = save
+    r = sign_in(client)
+    assert "didn't issue a session kcal can keep" in r.text
+    assert not (state / "garmin_tokens").exists()
+
+
+def test_real_gateway_refuses_session_without_refresh_token(tmp_path):
+    class Client:
+        di_token, di_refresh_token = "access", None
+
+        def dump(self, path):
+            pytest.fail("would overwrite stored tokens")
+
+    class Api:
+        client = Client()
+
+    with pytest.raises(login_page.IncompleteSession):
+        login_page.GarminGateway().save(Api(), tmp_path)
+
+
+def test_unwritable_token_store_is_explained(client, garmin):
+    def save(session, token_store):
+        raise PermissionError("locked")
+
+    garmin.save = save
+    r = sign_in(client)
+    assert r.status_code == 200 and "couldn't save the Garmin session" in r.text
+
+
+def test_cookie_not_secure_on_plain_http(garmin, state):
+    p = KcalOAuthProvider(state / "a.sqlite", "http://localhost:8000")
+    server = mcp_server.build_server(
+        HttpSettings(public_url="http://localhost:8000", garmin_owner=OWNER), p
+    )
+    with TestClient(server.streamable_http_app(), base_url="http://localhost:8000") as c:
+        r = c.get("/login")
+    assert "secure" not in r.headers["set-cookie"].lower()
+    p.close()
+
+
+@pytest.mark.parametrize(
+    "error", [GarminConnectConnectionError("timeout"), GarminConnectTooManyRequestsError("429")]
+)
+def test_garmin_outage_is_not_reported_as_expired(server, monkeypatch, error):
+    def fail(**_):
+        raise error
+
+    monkeypatch.setattr(mcp_server, "_api", None)
+    monkeypatch.setattr(mcp_server, "login", fail)
+    message = tool_error(server, "get_garmin_day", {"date": "2026-10-05"})
+    assert "try again in a few minutes" in message
+    assert "/login" not in message and "expired" not in message

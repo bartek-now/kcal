@@ -24,7 +24,11 @@ from typing import Any
 
 import anyio
 import uvicorn
-from garminconnect import GarminConnectAuthenticationError
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -120,6 +124,14 @@ def _login_error(err: Exception) -> GarminLoginError:
     url = _exposure.get().login_url
     if url is None:
         return GarminLoginError(str(err))
+    if isinstance(err, (GarminConnectConnectionError, GarminConnectTooManyRequestsError)):
+        # Garmin unreachable or limiting requests: passes on its own, and
+        # sending the owner to sign in would only spend sign-in attempts.
+        return GarminLoginError(
+            "Garmin is unreachable or limiting requests right now, so kcal can't "
+            "read Garmin data. This usually passes on its own: try again in a few "
+            "minutes. There's no need to sign in again or reconnect the connector."
+        )
     return GarminLoginError(garmin_expired_message(url))
 
 
@@ -342,7 +354,10 @@ def build_server(
     server = FastMCP("kcal", **kwargs)
     exposure = LOCAL if http is None else REMOTE
     if oauth is not None:
-        page = LoginPage(oauth, http.garmin_owner, garmin_token_store(), on_login=_reset_api)
+        page = LoginPage(
+            oauth, http.garmin_owner, garmin_token_store(), on_login=_reset_api,
+            secure_cookie=http.public_url.startswith("https://"),
+        )
         server.custom_route("/login", methods=["GET", "POST"])(page.handle)
         exposure = replace(REMOTE, login_url=f"{http.public_url}/login")
     for fn in _TOOLS:

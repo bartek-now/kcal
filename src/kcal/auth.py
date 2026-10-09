@@ -17,6 +17,11 @@ class GarminLoginError(Exception):
     """
 
 
+def garmin_profile_id(api: Garmin) -> int:
+    """The account's stable ID: what KCAL_GARMIN_OWNER holds."""
+    return int(api.client.connectapi("/userprofile-service/socialProfile")["profileId"])
+
+
 def _prompt_mfa() -> str:
     return input("Enter Garmin MFA code: ").strip()
 

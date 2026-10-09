@@ -36,6 +36,7 @@ from garminconnect import (
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
+from kcal.auth import garmin_profile_id
 from kcal.oauth import KcalOAuthProvider
 
 # Failed attempts (wrong password or MFA code, wrong account, Garmin
@@ -65,18 +66,28 @@ class GarminGateway:
     def start(self, email: str, password: str) -> tuple[Any, bool]:
         """Log in with credentials. Returns (session, needs_mfa)."""
         api = Garmin(email=email, password=password, return_on_mfa=True)
-        status, _ = api.login()
+        # Straight to the credential login: Garmin.login() would first load a
+        # token store (GARMINTOKENS) if one is configured, and then never
+        # check the email and password at all.
+        status, _ = api.client.login(email, password, return_on_mfa=True)
         return api, status == "needs_mfa"
 
     def finish(self, api: Any, code: str) -> None:
         api.resume_login(None, code)
 
     def profile_id(self, api: Any) -> int:
-        return int(api.client.connectapi("/userprofile-service/socialProfile")["profileId"])
+        return garmin_profile_id(api)
 
     def save(self, api: Any, token_store: Path) -> None:
-        token_store.mkdir(parents=True, exist_ok=True)
+        # Only a session with refresh tokens can be loaded again later; don't
+        # overwrite stored tokens that may still work with one that can't.
+        if not (api.client.di_token and api.client.di_refresh_token):
+            raise IncompleteSession("Garmin signed in without issuing reusable tokens")
         api.client.dump(str(token_store))
+
+
+class IncompleteSession(Exception):
+    pass
 
 
 @dataclass
@@ -94,13 +105,20 @@ class LoginPage:
         token_store: Path,
         on_login: Callable[[], None],
         garmin: GarminGateway | None = None,
+        secure_cookie: bool = True,
     ):
         self.oauth = oauth
         self.owner_id = owner_id
         self.token_store = token_store
         self.on_login = on_login  # new Garmin tokens saved: drop any cached session
         self.garmin = garmin or GarminGateway()
+        # False only for an http://localhost public URL, where browsers may
+        # drop Secure cookies.
+        self.secure_cookie = secure_cookie
         self._failures: deque[float] = deque()
+        # Garmin sign-ins still running count toward the cap, so parallel
+        # requests can't all pass the check before any failure is recorded.
+        self._in_flight = 0
         self._mfa: dict[str, _MfaFlow] = {}
 
     # --- entry point -----------------------------------------------------------
@@ -132,7 +150,7 @@ class LoginPage:
         if not email or not password:
             return self._form(request, request_id, error="Enter your Garmin email and password.", email=email)
         try:
-            api, needs_mfa = await anyio.to_thread.run_sync(self.garmin.start, email, password)
+            api, needs_mfa = await self._attempt(self.garmin.start, email, password)
         except Exception as err:
             return self._failed(request, request_id, err, email)
         if needs_mfa:
@@ -146,16 +164,18 @@ class LoginPage:
         return await self._finish(request, api, request_id)
 
     async def _mfa_step(self, request, flow_id, code) -> Response:
-        flow = self._mfa.pop(flow_id, None)
+        flow = self._mfa.get(flow_id)
         if flow is None or flow.expires_at <= time.time():
+            self._mfa.pop(flow_id, None)
             return self._page(
                 "Sign-in expired",
                 "<p>The sign-in took too long. Please start again.</p>", 400,
             )
         if locked := self._locked():
-            return locked
+            return locked  # the code can still be entered once the pause ends
+        del self._mfa[flow_id]
         try:
-            await anyio.to_thread.run_sync(self.garmin.finish, flow.api, code.strip())
+            await self._attempt(self.garmin.finish, flow.api, code.strip())
         except Exception as err:
             # Garmin's MFA state is single use: a wrong code means starting over.
             return self._failed(request, flow.request_id, err, "")
@@ -172,8 +192,18 @@ class LoginPage:
                 request, request_id,
                 error="That Garmin account isn't the one this server belongs to.",
             )
-        await anyio.to_thread.run_sync(self.garmin.save, api, self.token_store)
-        self.on_login()
+        try:
+            await anyio.to_thread.run_sync(self.garmin.save, api, self.token_store)
+        except Exception as err:
+            reason = (
+                "Garmin didn't issue a session kcal can keep"
+                if isinstance(err, IncompleteSession)
+                else "kcal couldn't save the Garmin session"
+            )
+            return self._form(
+                request, request_id, error=f"Signed in, but {reason}. Please try again."
+            )
+        await anyio.to_thread.run_sync(self.on_login)
         if request_id is None:
             return self._page(
                 "Garmin session refreshed",
@@ -194,13 +224,22 @@ class LoginPage:
 
     # --- failures ------------------------------------------------------------------
 
+    async def _attempt(self, fn, *args):
+        """Run a Garmin sign-in step in a worker thread, counted as in flight."""
+        self._in_flight += 1
+        try:
+            return await anyio.to_thread.run_sync(fn, *args)
+        finally:
+            self._in_flight -= 1
+
     def _locked(self) -> Response | None:
         now = time.time()
         while self._failures and self._failures[0] <= now - FAILURE_WINDOW_SECONDS:
             self._failures.popleft()
-        if len(self._failures) < MAX_FAILURES:
+        if len(self._failures) + self._in_flight < MAX_FAILURES:
             return None
-        minutes = int((self._failures[0] + FAILURE_WINDOW_SECONDS - now) // 60) + 1
+        oldest = self._failures[0] if self._failures else now
+        minutes = int((oldest + FAILURE_WINDOW_SECONDS - now) // 60) + 1
         return self._page(
             "Too many attempts",
             f"<p>There were too many failed sign-ins. To protect your Garmin account "
@@ -298,11 +337,10 @@ class LoginPage:
         response.headers.update(SECURITY_HEADERS)
         return response
 
-    @staticmethod
-    def _with_csrf(response: Response, csrf: str) -> Response:
+    def _with_csrf(self, response: Response, csrf: str) -> Response:
         response.set_cookie(
-            CSRF_COOKIE, csrf, httponly=True, secure=True, samesite="strict", path="/login",
-            max_age=60 * 60,
+            CSRF_COOKIE, csrf, httponly=True, secure=self.secure_cookie, samesite="strict",
+            path="/login", max_age=60 * 60,
         )
         return response
 
