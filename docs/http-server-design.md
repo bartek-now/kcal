@@ -1,8 +1,10 @@
 # Remote (HTTP) MCP server — design
 
-Status: agreed in discussion 2026-10-09. Built so far: steps 1 and 2 (HTTP
-transport, settings, remote exposure rules). Everything else, including
-authentication, is still planned; see "Build order".
+Status: agreed in discussion 2026-10-09. Built so far: steps 1-3 (HTTP
+transport, settings, remote exposure rules, OAuth authorization server).
+The `/login` page (step 4) is a placeholder that answers 503, so clients
+can't complete authorization yet; until it exists, `--no-auth` remains as
+an escape hatch for short tests. See "Build order".
 
 ## Goal
 
@@ -102,7 +104,7 @@ put in front later without restructuring it.
 | Token | Lifetime | Notes |
 |---|---|---|
 | Access token | 1 hour | Opaque random string; stored hashed. |
-| Refresh token | 30 days, rotated on use | Client refreshes silently; a full re-login is needed only after 30 days of no use or a revoke. |
+| Refresh token | 30 days, rotated on use | Client refreshes silently; a full re-login is needed only after 30 days of no use or a revoke. A rotated token that comes back again (stolen or replayed) ends the whole chain of tokens from that login. |
 | Authorization code | 5 minutes, single use | |
 
 All stored in one SQLite file (`KCAL_STATE_DIR/mcp_auth.sqlite`): registered
@@ -243,8 +245,21 @@ The allowlist lives in `endpoints.py` as one explicit set, so new
 - Garmin tokens and `mcp_auth.sqlite` on disk are what protect the data;
   `KCAL_STATE_DIR` should only be readable by the owner.
 - One shared Garmin session; re-login replaces it under the existing lock.
-- Revoking all access: delete `mcp_auth.sqlite` (or a `kcal revoke-all`
-  command) and restart.
+- Revoking all access: `kcal-mcp --revoke-all` signs every client out,
+  even while the server runs (clients stay registered and just log in
+  again). Deleting `mcp_auth.sqlite` and restarting also forgets the
+  registrations.
+- `/register` and `/authorize` are open to anyone with the URL, so what they
+  can make the server keep is bounded: at most 100 waiting authorizations
+  (oldest dropped), clients that never got a token are forgotten after a
+  day, and registration stops at 500 clients.
+- `KCAL_STATE_DIR` is created owner-only (0700) and `mcp_auth.sqlite` is
+  0600 where the OS supports it (on Windows the user profile's ACLs apply).
+- The OAuth scope is `garmin:read`. Registration is open to any client, as
+  the MCP spec expects; what protects the data is that tokens are only
+  issued after the owner logs in on `/login`. That page should therefore
+  show which client is asking and where it will send the owner back
+  (client name and redirect host), so a look-alike client can be spotted.
 
 ## 7. Moving to an always-on host later
 
@@ -261,6 +276,7 @@ The allowlist lives in `endpoints.py` as one explicit set, so new
 2. Remote allowlist and location stripping, with the positive and negative
    tests from section 5.
 3. OAuth provider + SQLite store, with tests against the SDK's handlers.
+   *(done; `/login` is a 503 placeholder)*
 4. `/login` page (both entry points): Garmin login, MFA step, owner check,
    rate limit; tests with a faked `Garmin`.
 5. Connect claude.ai and ChatGPT through a quick tunnel; check the current

@@ -77,9 +77,11 @@ def _check_url(url: str) -> str:
             f"KCAL_PUBLIC_URL must be just scheme and host, e.g. "
             f"https://abc.trycloudflare.com: {url!r}"
         )
+    # Hosts are case-insensitive, but Host/Origin and the OAuth resource are
+    # compared as strings: use the lowercase form everywhere.
+    netloc = parts.netloc.lower()
     # Clients leave a default port out of the Host and Origin headers, which
     # must match exactly, so leave it out here too.
-    netloc = parts.netloc
     if parts.port == {"https": 443, "http": 80}[parts.scheme]:
         netloc = netloc.rsplit(":", 1)[0]
     return f"{parts.scheme}://{netloc}"

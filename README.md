@@ -106,12 +106,14 @@ through a tunnel. See [docs/http-server-design.md](docs/http-server-design.md).
 Over HTTP, the tools only reach an allowlist of health and fitness endpoints
 (`REMOTE_ALLOWED` in `endpoints.py`), and location and identity data
 (coordinates, GPS tracks, place names, your name and profile photo) is
-stripped from every result. Authentication isn't
-built yet, so for now it refuses to start without `--no-auth`. Only use it
+stripped from every result. Clients connect with OAuth: they register
+themselves and send you to a login page. That page isn't built yet (it
+answers 503), so for now clients can only connect when the server runs with
+`--no-auth`, which lets anyone with the URL read your data. Only use that
 for short tests.
 
 | Setting | Flag | Default |
 |---|---|---|
 | `KCAL_PUBLIC_URL` | `--public-url` | required, e.g. `https://abc.trycloudflare.com` |
 | `KCAL_PORT` | `--port` | `8000` |
-| `KCAL_STATE_DIR` | | `~/.kcal` (Garmin tokens, shared with `kcal fetch`) |
+| `KCAL_STATE_DIR` | | `~/.kcal` (Garmin tokens, shared with `kcal fetch`; `mcp_auth.sqlite` with OAuth clients and hashed tokens) |

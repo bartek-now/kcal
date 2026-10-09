@@ -26,13 +26,16 @@ import anyio
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from kcal import endpoints
 from kcal.auth import GarminLoginError, login
 from kcal.daily import fetch_days, fetch_weights, resolve_days
 from kcal.http_log import LogClientErrors
 from kcal.models import DayStats
-from kcal.settings import HttpSettings
+from kcal.oauth import KcalOAuthProvider, auth_settings
+from kcal.settings import HttpSettings, state_dir
 
 # Filled by @_tool; build_server() registers them on each FastMCP instance.
 _TOOLS = []
@@ -263,11 +266,14 @@ def get_kcal_server_info() -> dict:
     }
 
 
-def build_server(http: HttpSettings | None = None) -> FastMCP:
+def build_server(
+    http: HttpSettings | None = None, oauth: KcalOAuthProvider | None = None
+) -> FastMCP:
     """A FastMCP server with every tool. With `http`, it's set up to be
     served over Streamable HTTP on 127.0.0.1, reached through `http.public_url`,
     and its tools only reach REMOTE_ALLOWED endpoints, with location data
-    stripped from every result.
+    stripped from every result. With `oauth` too, /mcp needs a bearer token
+    from its authorization server (docs/http-server-design.md, section 2).
     """
     kwargs = {}
     if http is not None:
@@ -292,11 +298,29 @@ def build_server(http: HttpSettings | None = None) -> FastMCP:
                 ],
             ),
         )
+    if oauth is not None:
+        if http is None:
+            raise ValueError("OAuth needs HTTP settings (the public URL)")
+        kwargs.update(auth_server_provider=oauth, auth=auth_settings(http.public_url))
     server = FastMCP("kcal", **kwargs)
+    if oauth is not None:
+        _add_login_routes(server, oauth)
     exposure = LOCAL if http is None else REMOTE
     for fn in _TOOLS:
         server.tool(structured_output=False)(_wrap(fn, exposure))
     return server
+
+
+def _add_login_routes(server: FastMCP, oauth: KcalOAuthProvider) -> None:
+    @server.custom_route("/login", methods=["GET", "POST"])
+    async def login_page(request: Request):
+        # Placeholder until the Garmin login page (build step 4).
+        return PlainTextResponse(
+            "The kcal login page isn't built yet, so connecting a client with "
+            "authentication isn't possible yet.",
+            status_code=503,
+            headers={"Cache-Control": "no-store"},
+        )
 
 
 mcp = build_server()
@@ -322,36 +346,58 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--no-auth", action="store_true",
-        help="Required with --http until OAuth is implemented: acknowledges "
-        "that anyone with the URL can read your Garmin data",
+        help="Serve --http without OAuth, so anyone with the URL can read your "
+        "Garmin data. Only for short tests until the login page exists",
+    )
+    parser.add_argument(
+        "--revoke-all", action="store_true",
+        help="Sign every connected client out (they log in again), then exit. "
+        "Works while the server is running",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.revoke_all:
+        return _revoke_all()
     if not args.http:
         mcp.run()
         return 0
-    if not args.no_auth:
-        print(
-            "kcal-mcp: --http has no authentication yet, so anyone with the "
-            "URL could read your Garmin data. Pass --no-auth to run it anyway "
-            "(e.g. for a short smoke test).",
-            file=sys.stderr,
-        )
-        return 2
     try:
         http = HttpSettings.from_env(public_url=args.public_url, port=args.port)
     except ValueError as e:
         print(f"kcal-mcp: {e}", file=sys.stderr)
         return 2
+    oauth = None
+    if not args.no_auth:
+        oauth = KcalOAuthProvider(state_dir() / "mcp_auth.sqlite", http.public_url)
     print(
         f"kcal-mcp: serving {http.public_url}/mcp from 127.0.0.1:{http.port} "
-        "WITHOUT authentication",
+        + ("with OAuth" if oauth else "WITHOUT authentication"),
         file=sys.stderr,
     )
-    serve_http(build_server(http))
+    if oauth:
+        print(
+            "kcal-mcp: note: the login page isn't built yet, so clients can't "
+            "finish connecting; use --no-auth for short tests until it is.",
+            file=sys.stderr,
+        )
+    serve_http(build_server(http, oauth))
+    return 0
+
+
+def _revoke_all() -> int:
+    db = state_dir() / "mcp_auth.sqlite"
+    if not db.exists():
+        print(f"kcal-mcp: no OAuth database at {db}; nothing to revoke.", file=sys.stderr)
+        return 0
+    provider = KcalOAuthProvider(db, public_url="")
+    try:
+        ended = provider.revoke_all()
+    finally:
+        provider.close()
+    print(f"kcal-mcp: signed out {ended} client authorization(s).", file=sys.stderr)
     return 0
 
 
