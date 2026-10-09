@@ -61,3 +61,39 @@ Date selection:
 pip install -e . pytest
 pytest
 ```
+
+## MCP server
+
+`kcal-mcp` runs a stdio MCP server with six tools:
+
+- `get_garmin_daily_stats` (`date`, or `from_date`/`to_date`; defaults to
+  yesterday): the same fields as the CSV plus per-workout details. Ranges
+  are limited to 120 days.
+- `get_garmin_weight` (same date arguments): one compact row per day with a
+  weigh-in (`weight_kg`, plus `body_fat_pct`/`muscle_mass_kg` if the scale
+  reports them). Ranges up to 366 days, fetched in a single request.
+- `get_garmin_day` (`date`, optional `metrics`): several per-day metrics in
+  one call (sleep, HRV, resting HR, training readiness/status, ...).
+- `list_garmin_endpoints`: every read-only Garmin Connect endpoint and its
+  parameters.
+- `call_garmin_endpoint` (`endpoint`, `args`): call any of those endpoints,
+  e.g. `get_sleep_data` with `{"cdate": "2026-10-05"}`. Only `get_*` methods
+  are reachable, so nothing can write or delete. Results over ~50k chars are
+  replaced by a notice asking for a narrower request.
+- `get_kcal_server_info`: which code the running server loaded and whether
+  it's stale (code on disk changed since it started).
+
+`kcal fetch` output is unchanged. Login is non-interactive, so run
+`kcal fetch` once in a terminal first to cache the session token.
+
+Claude Desktop / Claude Code config:
+
+```json
+{
+  "mcpServers": {
+    "kcal": {
+      "command": "path\\to\\kcal\\.venv\\Scripts\\kcal-mcp.exe"
+    }
+  }
+}
+```

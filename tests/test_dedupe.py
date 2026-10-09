@@ -1,4 +1,4 @@
-from kcal.dedupe import build_day_stats
+from kcal.dedupe import build_day_stats, build_weight_row
 
 SUMMARY = {
     "totalSteps": 10000,
@@ -123,3 +123,39 @@ def test_workout_active_calories_never_negative():
     stats = build_day_stats("2026-07-06", SUMMARY, [activity])
     assert stats.workouts[0].active_calories == 0
     assert stats.workout_active_calories == 0
+
+
+def test_weight_row_includes_body_composition_from_last_weigh_in():
+    weigh_in = {
+        "dateWeightList": [
+            {"date": 1, "weight": 77000.0, "bodyFat": 23.0, "muscleMass": 31000},
+            {"date": 2, "weight": 76550.0, "bodyFat": 22.4, "muscleMass": 31120},
+        ]
+    }
+    assert build_weight_row("2026-10-08", weigh_in) == {
+        "date": "2026-10-08",
+        "weight_kg": 76.5,
+        "body_fat_pct": 22.4,
+        "muscle_mass_kg": 31.1,
+        "count": 2,
+    }
+
+
+def test_weight_row_omits_unreported_fields():
+    weigh_in = {"dateWeightList": [{"date": 1, "weight": 70500.0, "bodyFat": None}]}
+    assert build_weight_row("2026-07-06", weigh_in) == {"date": "2026-07-06", "weight_kg": 70.5}
+
+
+def test_weight_row_none_without_weigh_in():
+    assert build_weight_row("2026-07-06", {"dateWeightList": []}) is None
+
+
+def test_latest_weigh_in_falls_back_to_gmt_timestamp():
+    weigh_in = {
+        "dateWeightList": [
+            {"timestampGMT": 1, "weight": 71000.0},
+            {"timestampGMT": 2, "weight": 70200.0},  # later - wins
+        ]
+    }
+    stats = build_day_stats("2026-07-06", SUMMARY, [], weigh_in)
+    assert stats.weight_kg == 70.2

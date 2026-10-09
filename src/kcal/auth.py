@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from garminconnect import Garmin
@@ -18,6 +19,7 @@ def login(
     email: str | None = None,
     password: str | None = None,
     token_store: Path = DEFAULT_TOKEN_STORE,
+    prompt_mfa: Callable[[], str] = _prompt_mfa,
 ) -> Garmin:
     """Log in to Garmin Connect, reusing a cached session when available.
 
@@ -29,6 +31,6 @@ def login(
     email = email or os.environ.get("GARMIN_EMAIL")
     password = password or os.environ.get("GARMIN_PASSWORD")
 
-    api = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
+    api = Garmin(email=email, password=password, prompt_mfa=prompt_mfa)
     api.login(str(token_store))
     return api
