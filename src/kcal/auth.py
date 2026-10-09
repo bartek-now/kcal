@@ -11,6 +11,12 @@ from garminconnect import Garmin
 from kcal.settings import garmin_token_store
 
 
+class GarminLoginError(Exception):
+    """Logging in to Garmin failed: no usable cached session, and no way to
+    get one without the owner (credentials or an MFA code).
+    """
+
+
 def _prompt_mfa() -> str:
     return input("Enter Garmin MFA code: ").strip()
 

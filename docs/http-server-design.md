@@ -1,8 +1,8 @@
 # Remote (HTTP) MCP server — design
 
-Status: agreed in discussion 2026-10-09. Built so far: step 1 (HTTP
-transport, settings). Everything else, including authentication and the
-remote exposure rules in section 5, is still planned; see "Build order".
+Status: agreed in discussion 2026-10-09. Built so far: steps 1 and 2 (HTTP
+transport, settings, remote exposure rules). Everything else, including
+authentication, is still planned; see "Build order".
 
 ## Goal
 
@@ -158,11 +158,17 @@ starts the server is a possible convenience later.
 
 ## 5. Remote exposure
 
-*Planned (build step 2); until then HTTP mode exposes the same tools as stdio.*
+In HTTP mode, tools only reach allowlisted endpoints; stdio stays
+unrestricted. `call_garmin_endpoint` fails with "not available remotely" for
+anything else, `list_garmin_endpoints` only lists allowed endpoints, and a
+disallowed `metrics` entry of `get_garmin_day` gets its own "not available
+remotely" error while the other metrics are returned.
 
-In HTTP mode, `call_garmin_endpoint`, `list_garmin_endpoints` and the
-`metrics` of `get_garmin_day` only accept allowlisted endpoints; anything else
-fails with "not available remotely". stdio stays unrestricted.
+The allowlist is enforced in one place: tools reach Garmin only through a
+stand-in object that checks every attribute against the current policy
+(including the curated tools, which only use allowed endpoints anyway). The
+policy fails closed: code running outside a tool wrapper gets the remote
+rules, and stdio tools unlock everything explicitly.
 
 **Allowed** (health and fitness):
 
@@ -194,11 +200,18 @@ fails with "not available remotely". stdio stays unrestricted.
 challenges, golf, training plans, `goals`,
 `menstrual_*` and `pregnancy_summary`.
 
-**Location stripping:** activity summaries and splits carry start/end
-coordinates (`startLatitude`, `endLongitude`, …), which reveal where the owner
-lives. In HTTP mode every result passes through a filter that drops keys
-whose name contains `latitude`, `longitude`, `polyline` or `geo`
-(case-insensitive), recursively.
+**Stripping private fields:** activity summaries and splits carry start/end
+coordinates (`startLatitude`, `endLongitude`, …), and `get_activity` has a
+place name (`locationName`); these reveal where the owner lives. Allowed
+activity endpoints also carry the owner's identity (`ownerFullName`,
+`ownerDisplayName`, `ownerProfileImageUrl*`, `userInfoDto`), which blocking
+`full_name` and `user_profile` is meant to keep out. In HTTP mode every result
+passes through a filter that drops, recursively, keys containing the words
+`latitude`, `longitude`, `polyline`, `geo`, `location`, `owner`, `fullname`,
+`displayname` or `email`, or the word pairs "full name", "display name",
+"profile image" or "user info". Keys are split into words (camelCase or
+snake_case) and compared whole, so `averageOxygen…` and `timeAllocation` are
+kept. Elevation and time zone are left in: they're coarse.
 
 The allowlist lives in `endpoints.py` as one explicit set, so new
 `garminconnect` getters are blocked remotely until added on purpose.
@@ -215,8 +228,13 @@ The allowlist lives in `endpoints.py` as one explicit set, so new
 - Every allowlisted name exists on the installed `garminconnect.Garmin`, so a
   library rename can't silently drop an endpoint.
 - The same disallowed endpoints still work over stdio.
-- Location stripping removes nested coordinate keys (in lists and nested
-  objects) and leaves everything else unchanged.
+- Stripping removes nested coordinate and identity keys (in lists and nested
+  objects) and keeps look-alike health fields unchanged; no allowlisted
+  endpoint name counts as private.
+- The stand-in blocks disallowed getters and non-getters by default, and the
+  curated tools go through it.
+- A failed Garmin login fails `get_garmin_day` once (one login attempt), not
+  once per metric.
 
 ## 6. Other security notes
 
