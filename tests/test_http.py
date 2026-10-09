@@ -193,8 +193,10 @@ def test_stdio_server_has_no_http_settings():
 
 
 @pytest.fixture
-def runs(monkeypatch):
+def runs(monkeypatch, tmp_path):
     calls = []
+    # main() opens the OAuth database under KCAL_STATE_DIR: keep it out of ~/.kcal.
+    monkeypatch.setenv("KCAL_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(
         mcp_server.FastMCP, "run",
         lambda self, transport="stdio", **_: calls.append((self, transport)),
@@ -212,10 +214,22 @@ def test_main_defaults_to_stdio(runs):
     assert runs == [(mcp_server.mcp, "stdio")]
 
 
-def test_main_http_refuses_without_no_auth(runs, capsys):
-    assert mcp_server.main(["--http", "--public-url", PUBLIC]) == 2
-    assert runs == []
-    assert "--no-auth" in capsys.readouterr().err
+def test_main_http_uses_oauth_by_default(runs, capsys, tmp_path):
+    assert mcp_server.main(["--http", "--public-url", PUBLIC]) == 0
+    [(server, transport)] = runs
+    assert transport == "streamable-http"
+    assert server.settings.auth is not None
+    assert str(server.settings.auth.issuer_url).rstrip("/") == PUBLIC
+    assert (tmp_path / "mcp_auth.sqlite").exists()
+    assert "with OAuth" in capsys.readouterr().err
+
+
+def test_main_http_no_auth_skips_oauth(runs, capsys, tmp_path):
+    assert mcp_server.main(["--http", "--no-auth", "--public-url", PUBLIC]) == 0
+    [(server, _)] = runs
+    assert server.settings.auth is None
+    assert not (tmp_path / "mcp_auth.sqlite").exists()
+    assert "WITHOUT authentication" in capsys.readouterr().err
 
 
 def test_main_http_reports_bad_settings(runs, capsys):
