@@ -199,6 +199,22 @@ def strip_private(value: Any) -> Any:
     return value
 
 
+# garminconnect's docstrings repeat the date format, which the caller already
+# knows; e.g. "Return floors data for 'cDate' format 'YYYY-MM-DD'."
+_DATE_BOILERPLATE = re.compile(
+    r"\s*(?:for |on )?(?:the )?(?:date |day )?'?cdate'?(?: format)? '?YYYY-MM-DD'?", re.I
+)
+
+
+def describe(name: str) -> str:
+    """First line of garminconnect's docstring for get_<name>, without the
+    date-format boilerplate.
+    """
+    fn = _getters().get(f"get_{name}")
+    doc = (inspect.getdoc(fn) or "").strip().splitlines() if fn else []
+    return _DATE_BOILERPLATE.sub("", doc[0]).rstrip(" .") if doc else ""
+
+
 def single_day_metrics(allowed: Collection[str] | None = None) -> list[str]:
     """Endpoints whose only parameter is a single date (`cdate`)."""
     return sorted(
