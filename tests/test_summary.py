@@ -298,3 +298,119 @@ def test_range_endpoint_paths():
            f"//hrv-service/hrv/daily/{D1}/{D3}"]
     assert all(summary.RANGE_PATHS.fullmatch(p) for p in ok)
     assert not any(summary.RANGE_PATHS.fullmatch(p) for p in bad)
+
+
+# --- review fixes -----------------------------------------------------------------------
+
+
+def test_days_without_data_are_not_zeros(api):
+    original = api.get_user_summary
+    api.get_user_summary = lambda cdate: {} if cdate == str(D1) else original(cdate)
+    _, rows = table(api, ["activity"])
+    assert str(D1) not in rows  # no zeros for a day Garmin has nothing for
+    assert rows[str(D2)]["steps"] == 10000
+
+
+def test_failing_group_reports_its_error_and_others_still_come_back(api):
+    original = api.connectapi
+
+    def no_hrv(path):
+        if path.startswith("/hrv-service/"):
+            raise RuntimeError("404 no HRV on this watch")
+        return original(path)
+
+    api.connectapi = no_hrv
+    out = summary.summarize(api, [D1, D2, D3], ["weight", "hrv", "sleep"])
+    assert out["errors"] == {"hrv": "RuntimeError: 404 no HRV on this watch"}
+    assert "weight_kg" in out["fields"] and "sleep_score" in out["fields"]
+    assert not any(f.startswith("hrv_") for f in out["fields"])
+
+
+def test_failing_activities_fail_activity_and_workouts_only(api):
+    def broken(start, end):
+        raise RuntimeError("activities down")
+
+    api.get_activities_by_date = broken
+    out = summary.summarize(api, [D1, D2, D3], ["activity", "workouts", "heart"])
+    assert set(out["errors"]) == {"activity", "workouts"}
+    assert "resting_hr" in out["fields"] and "steps" not in out["fields"]
+
+
+def test_failing_day_is_reported_with_a_count(api):
+    original = api.get_lifestyle_logging_data
+
+    def flaky(cdate):
+        if cdate != str(D2):
+            raise RuntimeError("500")
+        return original(cdate)
+
+    api.get_lifestyle_logging_data = flaky
+    out = summary.summarize(api, [D1, D2, D3], ["lifestyle", "heart"])
+    assert out["errors"]["lifestyle"].startswith("2 day(s) failed, e.g. ")
+    assert "heart" not in out["errors"]
+    fields, rows = out["fields"], {r[0]: dict(zip(out["fields"], r)) for r in out["days"]}
+    assert rows[str(D2)]["logged_yes"] == ["Late Meals"]
+
+
+@pytest.mark.parametrize("error", ["login", "auth"])
+def test_login_problems_still_fail_the_whole_call(api, error):
+    from garminconnect import GarminConnectAuthenticationError
+
+    from kcal.auth import GarminLoginError
+
+    exc = GarminLoginError("expired") if error == "login" else GarminConnectAuthenticationError("401")
+
+    def fail(path):
+        raise exc
+
+    api.connectapi = fail
+    with pytest.raises(type(exc)):
+        summary.summarize(api, [D1, D2, D3], ["weight", "hrv"])
+
+
+def test_a_failed_day_stops_the_rest(api):
+    from garminconnect import GarminConnectAuthenticationError
+
+    days = [D1 + timedelta(days=i) for i in range(40)]
+    asked = []
+
+    def summary_failing_on_day_2(cdate):
+        asked.append(cdate)
+        if cdate == str(days[1]):
+            raise GarminConnectAuthenticationError("401")
+        threading.Event().wait(0.05)
+        return {"totalSteps": 1}
+
+    api.get_user_summary = summary_failing_on_day_2
+    with pytest.raises(GarminConnectAuthenticationError):
+        summary.summarize(api, days, ["activity"])
+    assert len(asked) < 15  # the queued days were cancelled, not all sent
+
+
+def test_empty_range_has_the_usual_shape(api):
+    assert summary.summarize(api, [], ["hrv"]) == {"fields": ["date"], "days": []}
+    assert api.calls == []
+
+
+def test_token_refresh_is_serialized():
+    from kcal.auth import _serialize_token_refresh
+
+    running, overlaps = [], []
+
+    class Client:
+        def _refresh_session(self):
+            running.append(1)
+            if len(running) > 1:
+                overlaps.append(1)
+            threading.Event().wait(0.05)
+            running.pop()
+
+    client = Client()
+    _serialize_token_refresh(client)
+    _serialize_token_refresh(client)  # idempotent
+    threads = [threading.Thread(target=client._refresh_session) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert overlaps == []

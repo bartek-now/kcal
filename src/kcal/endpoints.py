@@ -206,13 +206,17 @@ _DATE_BOILERPLATE = re.compile(
 )
 
 
-def describe(name: str) -> str:
-    """First line of garminconnect's docstring for get_<name>, without the
-    date-format boilerplate.
+def describe(names: list[str]) -> dict[str, str]:
+    """For each name, the first line of garminconnect's docstring for
+    get_<name>, without the date-format boilerplate.
     """
-    fn = _getters().get(f"get_{name}")
-    doc = (inspect.getdoc(fn) or "").strip().splitlines() if fn else []
-    return _DATE_BOILERPLATE.sub("", doc[0]).rstrip(" .") if doc else ""
+    getters = _getters()
+    out = {}
+    for name in names:
+        fn = getters.get(f"get_{name}")
+        doc = (inspect.getdoc(fn) or "").strip().splitlines() if fn else []
+        out[name] = _DATE_BOILERPLATE.sub("", doc[0]).rstrip(" .") if doc else ""
+    return out
 
 
 def single_day_metrics(allowed: Collection[str] | None = None) -> list[str]:

@@ -238,9 +238,11 @@ def test_curated_tools_go_through_the_stand_in(api, remote, monkeypatch, tool, a
     monkeypatch.setattr(endpoints, "REMOTE_ALLOWED", frozenset())
     monkeypatch.setattr(mcp_server, "REMOTE", mcp_server._Exposure(frozenset(), endpoints.strip_private))
     blocked = mcp_server.build_server(HttpSettings(public_url="https://x.example"))
-    with pytest.raises(ToolError, match="not available remotely"):
-        call(blocked, tool, args)
-    assert api.calls == []
+    out = call(blocked, tool, args)
+    # Reported as that group's error; Garmin is never asked.
+    group = args["metrics"][0]
+    assert "not available remotely" in out["errors"][group]
+    assert out["days"] == [] and api.calls == []
 
 
 # --- Garmin login failures ------------------------------------------------------
@@ -321,10 +323,6 @@ def test_summary_works_remotely_and_strips_nothing_it_needs(api, remote, monkeyp
 
 def test_remote_day_enum_lists_only_allowlisted_metrics(remote, monkeypatch):
     import asyncio
-    monkeypatch.setattr(endpoints, "REMOTE_ALLOWED", frozenset({"sleep_data", "hrv_data"}))
-    server = mcp_server.build_server(
-        HttpSettings(public_url="https://x.example"),
-    )
     monkeypatch.setattr(mcp_server, "REMOTE", mcp_server._Exposure(
         frozenset({"sleep_data", "hrv_data"}), endpoints.strip_private))
     server = mcp_server.build_server(HttpSettings(public_url="https://x.example"))

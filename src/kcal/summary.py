@@ -14,6 +14,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+from garminconnect import GarminConnectAuthenticationError
+
+from kcal.auth import GarminLoginError
 from kcal.client import fetch_activities, fetch_day_summary, fetch_weigh_ins
 from kcal.dedupe import build_day_stats, build_weight_row
 from kcal.models import Workout
@@ -117,49 +120,102 @@ def summarize(api: Any, days: list[date], groups: list[str]) -> dict:
     """A table: {"fields": ["date", ...], "days": [[...], ...]}, one array of
     values per day (oldest first) in the order of `fields`, null where Garmin
     reported nothing. Field names appear once rather than on every day, which
-    keeps a year of data within the result size limit. Fields with no value
-    on any day, and days with no values, are left out.
+    keeps results compact. Fields with no value on any day, and days with no
+    values, are left out.
+
+    A group whose data can't be fetched doesn't sink the others: the result
+    then also has {"errors": {group: message}}. Garmin login problems still
+    fail the whole call, since every group would hit them.
     """
     groups = list(dict.fromkeys(groups))
     check_range(days, groups)
     if not days:
-        return {"days": []}
+        return {"fields": ["date"], "days": []}
     start, end = days[0], days[-1]
     rows: dict[str, dict] = {d.isoformat(): {} for d in days}
+    errors: dict[str, str] = {}
 
     def add(fields_by_day: dict[str, dict]) -> None:
         for iso, fields in fields_by_day.items():
             if iso in rows:
                 rows[iso].update(fields)
 
-    activities = (
-        fetch_activities(api, start, end) if {"activity", "workouts"} & set(groups) else {}
-    )
+    def fetch(failing_groups: list[str], fn):
+        """fn(), or None with an error recorded for each of the groups."""
+        try:
+            return fn()
+        except _LOGIN_ERRORS:
+            raise
+        except Exception as err:
+            for g in failing_groups:
+                errors[g] = _message(err)
+            return None
+
+    activities: dict = {}
+    if {"activity", "workouts"} & set(groups):
+        # activity needs them to take workout steps out of the daily total.
+        needing = [g for g in ("activity", "workouts") if g in groups]
+        activities = fetch(needing, lambda: fetch_activities(api, start, end))
+        if activities is None:
+            groups = [g for g in groups if g not in needing]
+            activities = {}
     if "workouts" in groups:
         add({iso: {"workouts": [_workout(a) for a in acts]} for iso, acts in activities.items()})
-    if "weight" in groups:
-        add(_weights(fetch_weigh_ins(api, start, end)))
-    if "hrv" in groups:
-        add(_hrv(api, start, end))
-    if "sleep" in groups:
-        add(_sleep(api, start, end))
-    if "readiness" in groups:
-        add(_readiness(api, start, end))
-    daily = bool({"activity", "heart", "stress"} & set(groups))
+    for group, fn in (
+        ("weight", lambda: _weights(fetch_weigh_ins(api, start, end))),
+        ("hrv", lambda: _hrv(api, start, end)),
+        ("sleep", lambda: _sleep(api, start, end)),
+        ("readiness", lambda: _readiness(api, start, end)),
+    ):
+        if group in groups:
+            add(fetch([group], fn) or {})
+
+    daily_groups = [g for g in ("activity", "heart", "stress") if g in groups]
     lifestyle = "lifestyle" in groups
 
-    def per_day(day: date) -> dict:
-        iso, fields = day.isoformat(), {}
-        if daily:
-            fields.update(_daily(fetch_day_summary(api, day), activities.get(iso, []), groups))
+    def per_day(day: date) -> tuple[dict, dict]:
+        iso, fields, failed = day.isoformat(), {}, {}
+        if daily_groups:
+            try:
+                fields.update(
+                    _daily(fetch_day_summary(api, day), activities.get(iso, []), daily_groups)
+                )
+            except _LOGIN_ERRORS:
+                raise
+            except Exception as err:
+                failed.update({g: _message(err) for g in daily_groups})
         if lifestyle:
-            fields.update(_lifestyle(api.get_lifestyle_logging_data(iso)))
-        return fields
+            try:
+                fields.update(_lifestyle(api.get_lifestyle_logging_data(iso)))
+            except _LOGIN_ERRORS:
+                raise
+            except Exception as err:
+                failed["lifestyle"] = _message(err)
+        return fields, failed
 
-    if daily or lifestyle:
-        for day, fields in zip(days, _map_per_day(per_day, days)):
+    if daily_groups or lifestyle:
+        failures: dict[str, list[tuple[str, str]]] = {}
+        for day, (fields, failed) in zip(days, _map_per_day(per_day, days)):
             add({day.isoformat(): fields})
-    return _table(rows, groups)
+            for g, message in failed.items():
+                failures.setdefault(g, []).append((day.isoformat(), message))
+        for g, failed_days in failures.items():
+            first_day, message = failed_days[0]
+            errors[g] = f"{len(failed_days)} day(s) failed, e.g. {first_day}: {message}"
+
+    out = _table(rows, list(dict.fromkeys(groups + list(errors))))
+    if errors:
+        out["errors"] = errors
+    return out
+
+
+# Problems with the Garmin session affect every group, so they fail the call
+# (and the MCP server turns them into "sign in again" instructions).
+_LOGIN_ERRORS = (GarminLoginError, GarminConnectAuthenticationError)
+
+
+def _message(err: Exception) -> str:
+    return f"{type(err).__name__}: {err}"[:300]
 
 
 def _map_per_day(fn, days: list[date]) -> list[dict]:
@@ -172,6 +228,8 @@ def _map_per_day(fn, days: list[date]) -> list[dict]:
     if len(days) == 1:
         return first
     ctx = contextvars.copy_context()
+    # If a day fails the call, map's results are abandoned and it cancels the
+    # days still queued, so they aren't sent to Garmin.
     with ThreadPoolExecutor(PER_DAY_WORKERS) as pool:
         return first + list(pool.map(lambda d: ctx.copy().run(fn, d), days[1:]))
 
@@ -222,7 +280,9 @@ def _weights(weigh_ins: dict[str, dict]) -> dict[str, dict]:
 def _daily(summary: dict, activities: list[dict], groups: list[str]) -> dict:
     s = summary
     out: dict[str, Any] = {}
-    if "activity" in groups:
+    # No step total means Garmin has nothing for the day (watch not worn,
+    # not owned yet, in the future): no activity numbers rather than zeros.
+    if "activity" in groups and s.get("totalSteps") is not None:
         stats = build_day_stats("", s, activities)
         out.update(
             steps=stats.total_steps,

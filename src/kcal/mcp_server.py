@@ -236,9 +236,12 @@ inclusive range; no arguments means yesterday. `metrics` picks the groups
 The result is a table: `fields` names the columns once, and `days` has one
 array per day (oldest first) in that order, null where Garmin reported
 nothing. Columns empty on every day, and days with no data, are left out.
-Ranges: up to {max_range} days, or {max_per_day} when a per-day group
-(activity, heart, stress, lifestyle) is included; per-day groups take about a
-second per 4 days. Sleep, HRV and readiness on date D describe the night
+If a group can't be fetched, the others are still returned, with
+`errors` saying which group failed and why. Ranges: up to {max_range} days, or
+{max_per_day} when a per-day group (activity, heart, stress, lifestyle) is
+included; per-day groups take about a second per 4 days. A year of up to three
+range groups (e.g. hrv, sleep, readiness) fits the result size limit; with more
+groups or workouts, use shorter ranges. Sleep, HRV and readiness on date D describe the night
 ending on the morning of D, so they reflect day D-1's training, meals and
 logged behaviours. Calories are kcal. For one day's full Garmin detail use
 get_garmin_day.
@@ -357,19 +360,22 @@ def build_server(
         exposure = replace(REMOTE, login_url=f"{http.public_url}/login")
     for fn in _TOOLS:
         tool = _wrap(fn, exposure)
-        if fn is get_garmin_day:
-            _describe_day_metrics(tool, exposure.allowed)
+        if customize := getattr(fn, "customize", None):
+            customize(tool, exposure)
         server.tool(structured_output=False)(tool)
     return server
 
 
-def _describe_day_metrics(tool, allowed) -> None:
+def _describe_day_metrics(tool, exposure: _Exposure) -> None:
     """Give get_garmin_day's `metrics` an enum of the endpoints this server
     accepts (only allowlisted ones over HTTP), each described in one line.
+    The list depends on the server, so it's filled in here rather than in the
+    docstring itself.
     """
-    names = endpoints.single_day_metrics(allowed)
-    tool.__doc__ = get_garmin_day.__doc__.format(
-        metrics="\n".join(f"- {n}: {endpoints.describe(n)}" for n in names)
+    names = endpoints.single_day_metrics(exposure.allowed)
+    descriptions = endpoints.describe(names)
+    tool.__doc__ = inspect.cleandoc(get_garmin_day.__doc__).format(
+        metrics="\n".join(f"- {n}: {descriptions[n]}" for n in names)
     )
     sig = inspect.signature(get_garmin_day, eval_str=True)
     allowed_type = list[Literal[tuple(names)]] | None if names else None  # none: only null
@@ -379,6 +385,7 @@ def _describe_day_metrics(tool, allowed) -> None:
     )
 
 
+get_garmin_day.customize = _describe_day_metrics
 mcp = build_server()
 
 

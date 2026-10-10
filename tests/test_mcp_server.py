@@ -143,3 +143,15 @@ def test_tools_run_off_the_event_loop(monkeypatch):
     )
     call("call_garmin_endpoint", {"endpoint": "get_sleep_data"})
     assert seen and seen[0] != loop_thread
+
+
+def test_day_description_is_dedented_on_every_python(monkeypatch):
+    # Before 3.13 docstrings keep their indentation; simulate that, and the
+    # metric list must still line up.
+    first, *rest = mcp_server.get_garmin_day.__doc__.splitlines()
+    indented = "\n".join([first, *("    " + line if line else line for line in rest)])
+    monkeypatch.setattr(mcp_server.get_garmin_day, "__doc__", indented)
+    lines = tool("get_garmin_day", mcp_server.build_server()).description.splitlines()
+    metric_lines = [l for l in lines if l.lstrip().startswith("- ")]
+    assert metric_lines and all(l.startswith("- ") for l in metric_lines)
+    assert not any(l.startswith(" ") for l in lines)
