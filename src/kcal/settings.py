@@ -30,6 +30,8 @@ class HttpSettings:
 
     public_url: str
     port: int = DEFAULT_PORT
+    # Garmin profile ID allowed to log in on /login (`kcal whoami` prints it).
+    garmin_owner: int | None = None
 
     @property
     def public_host(self) -> str:
@@ -42,9 +44,11 @@ class HttpSettings:
         env: Mapping[str, str] = os.environ,
         public_url: str | None = None,
         port: int | str | None = None,
+        garmin_owner: int | str | None = None,
     ) -> HttpSettings:
-        """Explicit arguments (from CLI flags) win over KCAL_PUBLIC_URL and
-        KCAL_PORT. Raises ValueError naming the setting that's wrong.
+        """Explicit arguments (from CLI flags) win over KCAL_PUBLIC_URL,
+        KCAL_PORT and KCAL_GARMIN_OWNER. Raises ValueError naming the setting
+        that's wrong.
         """
         url = public_url or env.get("KCAL_PUBLIC_URL")
         if not url:
@@ -55,6 +59,9 @@ class HttpSettings:
         return cls(
             public_url=_check_url(url),
             port=_check_port(port if port is not None else env.get("KCAL_PORT")),
+            garmin_owner=_check_owner(
+                garmin_owner if garmin_owner is not None else env.get("KCAL_GARMIN_OWNER")
+            ),
         )
 
 
@@ -85,6 +92,18 @@ def _check_url(url: str) -> str:
     if parts.port == {"https": 443, "http": 80}[parts.scheme]:
         netloc = netloc.rsplit(":", 1)[0]
     return f"{parts.scheme}://{netloc}"
+
+
+def _check_owner(value: int | str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(
+            f"KCAL_GARMIN_OWNER must be a Garmin profile ID (a number; run "
+            f"`kcal whoami`): {value!r}"
+        ) from None
 
 
 def _check_port(value: int | str | None) -> int:

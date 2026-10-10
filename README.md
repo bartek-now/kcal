@@ -98,7 +98,7 @@ Claude Desktop / Claude Code config (stdio):
 }
 ```
 
-### Over HTTP (work in progress)
+### Over HTTP
 
 `kcal-mcp --http` serves the same tools over Streamable HTTP at `/mcp` on
 `127.0.0.1`, for remote clients such as claude.ai and ChatGPT reaching it
@@ -106,14 +106,25 @@ through a tunnel. See [docs/http-server-design.md](docs/http-server-design.md).
 Over HTTP, the tools only reach an allowlist of health and fitness endpoints
 (`REMOTE_ALLOWED` in `endpoints.py`), and location and identity data
 (coordinates, GPS tracks, place names, your name and profile photo) is
-stripped from every result. Clients connect with OAuth: they register
-themselves and send you to a login page. That page isn't built yet (it
-answers 503), so for now clients can only connect when the server runs with
-`--no-auth`, which lets anyone with the URL read your data. Only use that
-for short tests.
+stripped from every result.
+
+Clients connect with OAuth: they register themselves and send you to
+`<public URL>/login`, where you sign in to Garmin (with the verification
+code if Garmin asks). Only the Garmin account set as owner gets through,
+and failed sign-ins are capped at 5 an hour. When Garmin's session expires,
+the tools answer with a link to the same page.
+
+1. Run `kcal whoami` to get your Garmin profile ID.
+2. Start a tunnel, e.g. `cloudflared tunnel --url http://localhost:8000`.
+3. Start `kcal-mcp --http --public-url <tunnel URL> --garmin-owner <profile ID>`.
+4. Add `<tunnel URL>/mcp` as a connector. In claude.ai choose "Sign in now"
+   and "Register automatically"; in ChatGPT choose OAuth.
+
+`kcal-mcp --revoke-all` signs every client out, even while the server runs.
 
 | Setting | Flag | Default |
 |---|---|---|
 | `KCAL_PUBLIC_URL` | `--public-url` | required, e.g. `https://abc.trycloudflare.com` |
+| `KCAL_GARMIN_OWNER` | `--garmin-owner` | required; your Garmin profile ID from `kcal whoami` |
 | `KCAL_PORT` | `--port` | `8000` |
 | `KCAL_STATE_DIR` | | `~/.kcal` (Garmin tokens, shared with `kcal fetch`; `mcp_auth.sqlite` with OAuth clients and hashed tokens) |

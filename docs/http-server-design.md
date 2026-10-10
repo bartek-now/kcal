@@ -1,10 +1,10 @@
 # Remote (HTTP) MCP server — design
 
-Status: agreed in discussion 2026-10-09. Built so far: steps 1-3 (HTTP
-transport, settings, remote exposure rules, OAuth authorization server).
-The `/login` page (step 4) is a placeholder that answers 503, so clients
-can't complete authorization yet; until it exists, `--no-auth` remains as
-an escape hatch for short tests. See "Build order".
+Status: agreed in discussion 2026-10-09. Built so far: steps 1-4 (HTTP
+transport, settings, remote exposure rules, OAuth authorization server,
+Garmin login page). HTTP mode always requires OAuth; there is no
+unauthenticated mode. Next: connecting the real clients (step 5). See
+"Build order".
 
 ## Goal
 
@@ -118,6 +118,7 @@ file; skipping the copy costs one reconnect per client.
 | MCP access token expired | 401 | Nothing; the client refreshes it. |
 | MCP refresh failed / revoked | 401 with `WWW-Authenticate: Bearer error="invalid_token", error_description=…, resource_metadata=…` | The client's own "reconnect" prompt. The description is filled in but clients don't show it, so it's not relied on. |
 | **Garmin tokens expired or revoked** | Normal tool result, `isError: true` | The model relays: *"Garmin session expired. Open https://…/login, sign in, then ask again."* |
+| Garmin unreachable or rate-limiting | Normal tool result, `isError: true` | "Try again in a few minutes", with no login link: signing in again wouldn't help and would spend sign-in attempts. |
 
 The Garmin-expiry error is the owner's only cue, so it must be actionable on
 its own, read by a model that knows nothing about kcal:
@@ -278,7 +279,7 @@ The allowlist lives in `endpoints.py` as one explicit set, so new
 3. OAuth provider + SQLite store, with tests against the SDK's handlers.
    *(done; `/login` is a 503 placeholder)*
 4. `/login` page (both entry points): Garmin login, MFA step, owner check,
-   rate limit; tests with a faked `Garmin`.
+   rate limit; tests with a faked `Garmin`. *(done)*
 5. Connect claude.ai and ChatGPT through a quick tunnel; check the current
    requirements of each (ChatGPT developer mode, claude.ai custom connectors).
 6. Later: Google sign-in gate, hosting; optionally URL-mode elicitation.
