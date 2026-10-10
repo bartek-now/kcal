@@ -46,6 +46,9 @@ ACCESS_TOKEN_SECONDS = 60 * 60
 REFRESH_TOKEN_SECONDS = 30 * 24 * 60 * 60
 CODE_SECONDS = 5 * 60
 PENDING_SECONDS = 10 * 60
+# An expired request is remembered this much longer, only so the login page
+# can still send the browser back to the client that started it.
+RECENT_SECONDS = 60 * 60
 
 # /register and /authorize are open to anyone who finds the URL, so what they
 # can make the server keep is bounded: waiting authorizations are capped
@@ -183,7 +186,9 @@ class KcalOAuthProvider:
                 "invalid_request", f"This server only issues tokens for {self.resource}"
             )
         now = time.time()
-        self._pending = {k: p for k, p in self._pending.items() if p.expires_at > now}
+        self._pending = {
+            k: p for k, p in self._pending.items() if p.expires_at + RECENT_SECONDS > now
+        }
         while len(self._pending) >= MAX_PENDING:
             del self._pending[min(self._pending, key=lambda k: self._pending[k].expires_at)]
         request_id = secrets.token_urlsafe(32)
@@ -197,9 +202,33 @@ class KcalOAuthProvider:
         p = self._pending.get(request_id)
         return p if p is not None and p.expires_at > time.time() else None
 
+    def expired(self, request_id: str) -> PendingAuthorization | None:
+        """A request that timed out recently (see return_to_client)."""
+        p = self._pending.get(request_id)
+        return p if p is not None and p.expires_at <= time.time() else None
+
+    def return_to_client(self, request_id: str) -> str | None:
+        """For an expired request: the URL that sends the browser back to the
+        client with an error, so it offers to connect again instead of
+        waiting forever. Single use.
+        """
+        if self.expired(request_id) is None:
+            return None
+        p = self._pending.pop(request_id)
+        return construct_redirect_uri(
+            str(p.params.redirect_uri),
+            error="access_denied",
+            error_description="The sign-in expired. Please connect again.",
+            state=p.params.state,
+        )
+
     def _take_pending(self, request_id: str) -> PendingAuthorization | None:
-        p = self._pending.pop(request_id, None)
-        return p if p is not None and p.expires_at > time.time() else None
+        """Remove and return a request that hasn't expired. An expired one
+        stays, for return_to_client().
+        """
+        if self.pending(request_id) is None:
+            return None
+        return self._pending.pop(request_id)
 
     def complete_authorization(self, request_id: str, subject: str) -> str:
         """The owner logged in as `subject`: issue a code and return the URL

@@ -222,8 +222,11 @@ def test_wrong_mfa_code_starts_over(client, garmin):
     csrf = client.cookies.get(login_page.CSRF_COOKIE)
     r = client.post("/login", data={"csrf": csrf, "flow": flow, "code": "000000", "action": "mfa"})
     assert "didn't accept" in r.text
+    # Garmin's MFA state is single use: submitting the flow again only shows
+    # the same answer, and Garmin isn't asked twice.
     r = client.post("/login", data={"csrf": csrf, "flow": flow, "code": "123456", "action": "mfa"})
-    assert r.status_code == 400 and "expired" in r.text  # the flow was single use
+    assert "didn't accept" in r.text
+    assert [c for c in garmin.calls if c[0] == "finish"] == [("finish", "000000")]
 
 
 def test_mfa_flow_expires(client, garmin, monkeypatch):
@@ -549,3 +552,151 @@ def test_garmin_outage_is_not_reported_as_expired(server, monkeypatch, error):
     message = tool_error(server, "get_garmin_day", {"date": "2026-10-05"})
     assert "try again in a few minutes" in message
     assert "/login" not in message and "expired" not in message
+
+
+# --- double submissions and ways out of error pages ---------------------------------------
+
+
+def test_double_submitted_code_still_gets_back_to_the_client(client, garmin):
+    # What happened live: Verify submitted twice. The browser shows the second
+    # response, which must be the same redirect, not "expired".
+    _, req = start_authorization(client)
+    r = sign_in(client, req, email="mfa@example.com")
+    data = {"csrf": client.cookies.get(login_page.CSRF_COOKIE), "flow": flow_id(r.text),
+            "req": req, "code": "123456", "action": "mfa"}
+    first = client.post("/login", data=data, follow_redirects=False)
+    second = client.post("/login", data=data, follow_redirects=False)
+    assert first.status_code == second.status_code == 303
+    assert second.headers["location"] == first.headers["location"]
+    assert [c for c in garmin.calls if c[0] == "finish"] == [("finish", "123456")]
+
+
+def test_concurrent_double_submit_waits_for_the_first(garmin, provider, state):
+    import threading
+
+    import httpx
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+
+    page = login_page.LoginPage(provider, OWNER, state / "garmin_tokens", lambda: None, garmin)
+    app = Starlette(routes=[Route("/login", page.handle, methods=["GET", "POST"])])
+    release = threading.Event()
+    original = garmin.finish
+
+    def slow_finish(session, code):
+        release.wait(5)
+        original(session, code)
+
+    garmin.finish = slow_finish
+
+    async def double_click():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=PUBLIC,
+            cookies={login_page.CSRF_COOKIE: "t"},
+        ) as c:
+            r = await c.post("/login", data={"csrf": "t", "email": "mfa@example.com",
+                                             "password": PASSWORD, "action": "signin"})
+            data = {"csrf": "t", "flow": flow_id(r.text), "code": "123456", "action": "mfa"}
+            tasks = [asyncio.create_task(c.post("/login", data=data)) for _ in range(2)]
+            await asyncio.sleep(0.3)
+            release.set()
+            return await asyncio.gather(*tasks)
+
+    first, second = asyncio.run(double_click())
+    assert "Garmin session refreshed" in first.text and second.text == first.text
+    assert len([c for c in garmin.calls if c[0] == "finish"]) == 1
+
+
+def test_double_submitted_sign_in_logs_in_once(client, garmin):
+    _, req = start_authorization(client)
+    r, csrf = open_form(client, req)
+    attempt = r.text.split('name="attempt" value="')[1].split('"')[0]
+    data = {"csrf": csrf, "req": req, "attempt": attempt, "email": "mfa@example.com",
+            "password": PASSWORD, "action": "signin"}
+    first, second = client.post("/login", data=data), client.post("/login", data=data)
+    assert flow_id(first.text) == flow_id(second.text)
+    assert [c for c in garmin.calls if c[0] == "start"] == [("start", "mfa@example.com")]
+
+
+def test_each_form_is_a_new_attempt(client, garmin):
+    # Retrying from a freshly loaded form really retries.
+    sign_in(client, password="wrong")
+    sign_in(client)
+    assert len([c for c in garmin.calls if c[0] == "start"]) == 2
+
+
+def test_expired_code_step_offers_to_start_again(client, garmin):
+    _, req = start_authorization(client)
+    r = client.post("/login", data={
+        "csrf": open_form(client, req)[1], "flow": "gone", "req": req,
+        "code": "1", "action": "mfa",
+    })
+    assert r.status_code == 400 and "Sign-in expired" in r.text
+    assert f'href="/login?req={req}">Start again' in r.text
+    assert 'value="deny">Cancel and go back to claude.ai' in r.text
+
+
+def test_expired_request_offers_the_way_back(client, garmin, provider, monkeypatch):
+    from kcal import oauth
+    _, req = start_authorization(client)
+    csrf = open_form(client, req)[1]
+    later = time.time() + oauth.PENDING_SECONDS + 1
+    monkeypatch.setattr(oauth.time, "time", lambda: later)
+    r = client.get("/login", params={"req": req})
+    assert r.status_code == 400 and "Back to claude.ai to connect again" in r.text
+    r = client.post("/login", data={"csrf": csrf, "req": req, "action": "return"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    back = query(r.headers["location"])
+    assert back["error"] == "access_denied" and back["state"] == "st4te"
+    assert "expired" in back["error_description"]
+    assert r.headers["location"].startswith(REDIRECT)
+    # Single use; afterwards the page can only point back to the app.
+    r = client.post("/login", data={"csrf": csrf, "req": req, "action": "return"})
+    assert "Go back to Claude or ChatGPT" in r.text
+
+
+def test_unknown_request_points_back_to_the_app(client):
+    r, _ = open_form(client, "never-existed")
+    assert "Go back to Claude or ChatGPT and connect again" in r.text
+
+
+def test_expired_refresh_offers_to_start_again(client):
+    r = client.post("/login", data={
+        "csrf": open_form(client)[1], "flow": "gone", "code": "1", "action": "mfa",
+    })
+    assert 'href="/login">Start again' in r.text
+
+
+def test_expired_form_offers_a_way_on(client):
+    _, req = start_authorization(client)
+    open_form(client, req)
+    r = client.post("/login", data={"csrf": "stale", "req": req, "action": "signin"})
+    assert r.status_code == 400 and f'href="/login?req={req}">Start again' in r.text
+
+
+def test_lockout_page_offers_cancel(client, garmin):
+    _, req = start_authorization(client)
+    for _ in range(login_page.MAX_FAILURES):
+        sign_in(client, req, password="wrong")
+    r = sign_in(client, req)
+    assert r.status_code == 429 and "Cancel and go back to claude.ai" in r.text
+
+
+def test_expired_requests_are_forgotten_after_an_hour(client, provider, monkeypatch):
+    from kcal import oauth
+    _, req = start_authorization(client)
+    later = time.time() + oauth.PENDING_SECONDS + oauth.RECENT_SECONDS + 1
+    monkeypatch.setattr(oauth.time, "time", lambda: later)
+    start_authorization(client)  # prunes
+    assert provider.expired(req) is None and provider.return_to_client(req) is None
+
+
+def test_completing_an_expired_request_is_refused(client, provider, monkeypatch):
+    from kcal import oauth
+    _, req = start_authorization(client)
+    later = time.time() + oauth.PENDING_SECONDS + 1
+    monkeypatch.setattr(oauth.time, "time", lambda: later)
+    with pytest.raises(KeyError):
+        provider.complete_authorization(req, "owner")
+    assert provider.expired(req) is not None  # still there for the way back

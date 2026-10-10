@@ -97,6 +97,19 @@ class _MfaFlow:
     expires_at: float
 
 
+@dataclass
+class _Submission:
+    """The outcome of one form submission, replayed if the same form is
+    submitted again (a double click, Enter plus click, a browser retry).
+    Otherwise the browser shows the second response and loses the first,
+    which may be the redirect back to the client.
+    """
+
+    done: anyio.Event
+    expires_at: float
+    response: tuple[int, bytes, list] | None = None
+
+
 class LoginPage:
     def __init__(
         self,
@@ -120,6 +133,7 @@ class LoginPage:
         # requests can't all pass the check before any failure is recorded.
         self._in_flight = 0
         self._mfa: dict[str, _MfaFlow] = {}
+        self._submissions: dict[str, _Submission] = {}
 
     # --- entry point -----------------------------------------------------------
 
@@ -127,25 +141,68 @@ class LoginPage:
         if request.method == "GET":
             return self._form(request, request.query_params.get("req") or None)
         form = await request.form()
+        request_id = str(form.get("req", "")) or None
         token = request.cookies.get(CSRF_COOKIE)
         if not token or not secrets.compare_digest(token, str(form.get("csrf", ""))):
-            return self._page("Session expired", "<p>This form expired. Please start again.</p>", 400)
-        request_id = str(form.get("req", "")) or None
+            return self._dead_end(request, "Form expired", "This form expired.", request_id)
         action = form.get("action")
         if action == "deny":
-            return self._deny(request_id)
+            return self._deny(request, request_id)
+        if action == "return":
+            back = self.oauth.return_to_client(request_id) if request_id else None
+            if back is None:
+                return self._dead_end(
+                    request, "Request expired", "This connection request is no longer known.",
+                    request_id,
+                )
+            return self._secure(RedirectResponse(back, status_code=303))
         if action == "mfa":
-            return await self._mfa_step(request, str(form.get("flow", "")), str(form.get("code", "")))
-        return await self._signin(
-            request, request_id, str(form.get("email", "")), str(form.get("password", ""))
+            flow = str(form.get("flow", ""))
+            return await self._once(
+                f"mfa:{flow}",
+                lambda: self._mfa_step(request, flow, request_id, str(form.get("code", ""))),
+            )
+        return await self._once(
+            f"signin:{form.get('attempt', '')}" if form.get("attempt") else None,
+            lambda: self._signin(
+                request, request_id, str(form.get("email", "")), str(form.get("password", ""))
+            ),
         )
+
+    async def _once(self, key: str | None, run) -> Response:
+        """Run a submission once per key; repeats get the first one's response."""
+        if key is None:
+            return await run()
+        now = time.time()
+        self._submissions = {k: s for k, s in self._submissions.items() if s.expires_at > now}
+        if (seen := self._submissions.get(key)) is not None:
+            await seen.done.wait()
+            if seen.response is not None:
+                status, body, headers = seen.response
+                replay = Response(body, status_code=status)
+                replay.raw_headers = list(headers)
+                return replay
+        while len(self._submissions) >= MAX_MFA_FLOWS * 5:
+            del self._submissions[min(self._submissions, key=lambda k: self._submissions[k].expires_at)]
+        entry = self._submissions[key] = _Submission(anyio.Event(), now + MFA_SECONDS)
+        try:
+            response = await run()
+            if response.status_code == 429:
+                # Paused, not attempted: once the pause ends, the same form
+                # must really be tried, not get this answer again.
+                del self._submissions[key]
+            else:
+                entry.response = (response.status_code, bytes(response.body), list(response.raw_headers))
+            return response
+        finally:
+            entry.done.set()
 
     # --- steps -------------------------------------------------------------------
 
     async def _signin(self, request, request_id, email, password) -> Response:
         if request_id is not None and self.oauth.pending(request_id) is None:
-            return self._expired_request()
-        if locked := self._locked():
+            return self._expired_request(request, request_id)
+        if locked := self._locked(request, request_id):
             return locked
         if not email or not password:
             return self._form(request, request_id, error="Enter your Garmin email and password.", email=email)
@@ -160,18 +217,18 @@ class LoginPage:
                 del self._mfa[min(self._mfa, key=lambda k: self._mfa[k].expires_at)]
             flow = secrets.token_urlsafe(32)
             self._mfa[flow] = _MfaFlow(api, request_id, now + MFA_SECONDS)
-            return self._mfa_form(request, flow)
+            return self._mfa_form(request, flow, request_id)
         return await self._finish(request, api, request_id)
 
-    async def _mfa_step(self, request, flow_id, code) -> Response:
+    async def _mfa_step(self, request, flow_id, request_id, code) -> Response:
         flow = self._mfa.get(flow_id)
         if flow is None or flow.expires_at <= time.time():
             self._mfa.pop(flow_id, None)
-            return self._page(
-                "Sign-in expired",
-                "<p>The sign-in took too long. Please start again.</p>", 400,
+            return self._dead_end(
+                request, "Sign-in expired",
+                "The verification step expired or was already used.", request_id,
             )
-        if locked := self._locked():
+        if locked := self._locked(request, flow.request_id):
             return locked  # the code can still be entered once the pause ends
         del self._mfa[flow_id]
         try:
@@ -213,11 +270,13 @@ class LoginPage:
         try:
             back = self.oauth.complete_authorization(request_id, subject=str(profile_id))
         except KeyError:
-            return self._expired_request()
+            return self._expired_request(request, request_id)
         return self._secure(RedirectResponse(back, status_code=303))
 
-    def _deny(self, request_id) -> Response:
+    def _deny(self, request, request_id) -> Response:
         back = self.oauth.deny_authorization(request_id) if request_id else None
+        if back is None:
+            back = self.oauth.return_to_client(request_id) if request_id else None
         if back is None:
             return self._page("Cancelled", "<p>Nothing was connected. You can close this page.</p>")
         return self._secure(RedirectResponse(back, status_code=303))
@@ -232,7 +291,7 @@ class LoginPage:
         finally:
             self._in_flight -= 1
 
-    def _locked(self) -> Response | None:
+    def _locked(self, request, request_id) -> Response | None:
         now = time.time()
         while self._failures and self._failures[0] <= now - FAILURE_WINDOW_SECONDS:
             self._failures.popleft()
@@ -240,11 +299,11 @@ class LoginPage:
             return None
         oldest = self._failures[0] if self._failures else now
         minutes = int((oldest + FAILURE_WINDOW_SECONDS - now) // 60) + 1
-        return self._page(
-            "Too many attempts",
-            f"<p>There were too many failed sign-ins. To protect your Garmin account "
-            f"from being locked, sign-in is paused for about {minutes} minute(s).</p>",
-            429,
+        return self._dead_end(
+            request, "Too many attempts",
+            f"There were too many failed sign-ins. To protect your Garmin account from "
+            f"being locked, sign-in is paused for about {minutes} minute(s).",
+            request_id, status=429,
         )
 
     def _failed(self, request, request_id, err: Exception, email: str) -> Response:
@@ -259,13 +318,43 @@ class LoginPage:
                 message = "Garmin didn't accept that. Check your email, password or code and try again."
         return self._form(request, request_id, error=message, email=email)
 
-    def _expired_request(self) -> Response:
-        return self._page(
-            "Request expired",
-            "<p>This connection request has expired or was already used. Start "
-            "connecting again from Claude or ChatGPT.</p>",
-            400,
+    def _expired_request(self, request, request_id) -> Response:
+        return self._dead_end(
+            request, "Request expired",
+            "This connection request has expired or was already used.", request_id,
         )
+
+    def _dead_end(self, request, title: str, message: str, request_id, status: int = 400) -> Response:
+        """An error page that always offers a way on: start again while the
+        connection request is valid, go back to the client once it has
+        expired, or start a plain Garmin sign-in.
+        """
+        csrf = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
+        body = f"<p>{html.escape(message, quote=False)}</p>"
+        pending = self.oauth.pending(request_id) if request_id else None
+        expired = self.oauth.expired(request_id) if request_id else None
+        if pending is not None:
+            body += (
+                f'<a class="button" href="/login?req={html.escape(request_id)}">Start again</a>'
+                f'<form method="post">{self._hidden(csrf, req=request_id)}'
+                f'<button class="secondary" name="action" value="deny">Cancel and go back to '
+                f'{html.escape(self._host(pending))}</button></form>'
+            )
+        elif expired is not None:
+            body += (
+                f'<form method="post">{self._hidden(csrf, req=request_id)}'
+                f'<button name="action" value="return">Back to '
+                f'{html.escape(self._host(expired))} to connect again</button></form>'
+            )
+        elif request_id is not None:
+            body += "<p>Go back to Claude or ChatGPT and connect again.</p>"
+        else:
+            body += '<a class="button" href="/login">Start again</a>'
+        return self._with_csrf(self._page(title, body, status), csrf)
+
+    @staticmethod
+    def _host(p) -> str:
+        return urlsplit(str(p.params.redirect_uri)).netloc
 
     # --- rendering ---------------------------------------------------------------------
 
@@ -273,9 +362,9 @@ class LoginPage:
         if request_id is not None:
             pending = self.oauth.pending(request_id)
             if pending is None:
-                return self._expired_request()
+                return self._expired_request(request, request_id)
             name = pending.client.client_name or "An app"
-            back_to = urlsplit(str(pending.params.redirect_uri)).netloc
+            back_to = self._host(pending)
             intro = (
                 f"<p><b>{html.escape(name)}</b> wants read access to your Garmin "
                 f"health data. Afterwards you'll be sent back to "
@@ -285,9 +374,10 @@ class LoginPage:
             intro = "<p>Sign in to Garmin to refresh kcal's Garmin session.</p>"
         csrf = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
         hidden = self._hidden(csrf, req=request_id or "")
+        attempt = self._hidden(csrf, attempt=secrets.token_urlsafe(16))[len(self._hidden(csrf)):]
         body = (
             f"{intro}{self._error(error)}"
-            f'<form method="post">{hidden}'
+            f'<form method="post">{hidden}{attempt}'
             f'<label>Garmin email<input name="email" type="email" autocomplete="username" '
             f'value="{html.escape(email)}" required></label>'
             f'<label>Password<input name="password" type="password" '
@@ -301,11 +391,11 @@ class LoginPage:
             )
         return self._with_csrf(self._page("Sign in to Garmin", body), csrf)
 
-    def _mfa_form(self, request, flow: str) -> Response:
+    def _mfa_form(self, request, flow: str, request_id) -> Response:
         csrf = request.cookies.get(CSRF_COOKIE) or secrets.token_urlsafe(32)
         body = (
             "<p>Garmin sent you a verification code. Enter it to finish signing in.</p>"
-            f'<form method="post">{self._hidden(csrf, flow=flow)}'
+            f'<form method="post">{self._hidden(csrf, flow=flow, req=request_id or "")}'
             f'<label>Code<input name="code" inputmode="numeric" autocomplete="one-time-code" '
             f'required autofocus></label>'
             f'<button name="action" value="mfa">Verify</button></form>'
@@ -356,6 +446,8 @@ font:inherit;border:1px solid #c5cad3;border-radius:8px}
 button{width:100%;padding:.65rem;margin-top:.6rem;font:inherit;font-weight:600;border:0;
 border-radius:8px;background:#1d4ed8;color:#fff;cursor:pointer}
 button.secondary{background:#e5e7eb;color:#1d2330}
+a.button{display:block;box-sizing:border-box;text-align:center;text-decoration:none;
+padding:.65rem;margin-top:.6rem;font-weight:600;border-radius:8px;background:#1d4ed8;color:#fff}
 .error{color:#b91c1c;font-weight:600}
 @media (prefers-color-scheme:dark){body{background:#111318;color:#e6e8ec}
 main{background:#1b1e25;box-shadow:none}input{background:#111318;color:inherit;border-color:#3a3f4b}
